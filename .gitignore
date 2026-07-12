@@ -1,0 +1,4 @@
+.venv/
+.venv-install.log
+__pycache__/
+*.wav
