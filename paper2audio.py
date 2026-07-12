@@ -92,11 +92,19 @@ def _is_author_list(text):
     return text.count("·") >= 2 and re.search(r"\d(?:,\d+)*\s*·", text)
 
 
+def _parse_authors(text):
+    """'Jane Doe1,2 · John Q. Smith3' -> 'Jane Doe, John Q. Smith'."""
+    text = re.sub(r"[‐‑‒­]", "-", text)
+    names = [re.sub(r"[\d,\s*]+$", "", n.strip()) for n in text.split("·")]
+    return ", ".join(n for n in names if n)
+
+
 def extract_segments(pdf_path):
     """Return a list of ('heading'|'body', text) segments in reading order."""
     doc = fitz.open(pdf_path)
     body_size = _body_font_size(doc)
     segments = []
+    meta = {"title": None, "authors": None}
 
     for page_no, page in enumerate(doc):
         height = page.rect.height
@@ -112,11 +120,14 @@ def extract_segments(pdf_path):
             if size < body_size - 0.6:
                 continue  # captions, affiliations, received/copyright lines
             if page_no == 0 and _is_author_list(flat):
+                meta["authors"] = _parse_authors(flat)
                 continue
             is_heading = size >= body_size + 0.8 and len(flat) < 120
             if is_heading and STOP_HEADINGS.match(flat):
-                return segments, True
+                return segments, True, meta
             if is_heading:
+                if page_no == 0 and meta["title"] is None:
+                    meta["title"] = flat
                 segments.append(("heading", flat))
             elif page_no == 0 and flat.startswith("Abstract"):
                 segments.append(("heading", "Abstract."))
@@ -126,7 +137,7 @@ def extract_segments(pdf_path):
                 segments.append(("body", "Keywords: " + keywords + "."))
             else:
                 segments.append(("body", text))
-    return segments, False
+    return segments, False, meta
 
 
 def merge_continuations(segments):
@@ -193,7 +204,7 @@ def build_playlist(segments):
 
 # ----------------------------------------------------------------- synthesis
 
-def synthesize(playlist, out_path, voice, speed):
+def synthesize(playlist, out_path, voice, speed, tags=None):
     import numpy as np
     import soundfile as sf
     import torch
@@ -220,11 +231,12 @@ def synthesize(playlist, out_path, voice, speed):
     wave = np.concatenate(parts)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
         sf.write(tmp.name, wave, SAMPLE_RATE, subtype="PCM_16")
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", tmp.name,
-             "-codec:a", "libmp3lame", "-q:a", "3", str(out_path)],
-            check=True,
-        )
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", tmp.name,
+               "-codec:a", "libmp3lame", "-q:a", "3"]
+        for key, value in (tags or {}).items():
+            if value:
+                cmd += ["-metadata", f"{key}={value}"]
+        subprocess.run(cmd + [str(out_path)], check=True)
     return len(wave) / SAMPLE_RATE
 
 
@@ -244,7 +256,7 @@ def main():
     if not args.pdf.is_file():
         sys.exit(f"error: no such file: {args.pdf}")
 
-    segments, found_references = extract_segments(args.pdf)
+    segments, found_references, meta = extract_segments(args.pdf)
     segments = merge_continuations(segments)
     while segments and segments[-1][0] == "heading":
         segments.pop()  # orphan trailing heading (e.g. Declarations with small-font body)
@@ -266,8 +278,12 @@ def main():
     words = sum(len(t.split()) for t, _ in playlist)
     print(f"{len(playlist)} chunks, ~{words} words (~{words / 170:.0f} min of audio)")
 
+    title = clean_text(meta["title"] or "") or args.pdf.stem
+    artist = (f"{meta['authors']} (audio by paper2audio)" if meta["authors"]
+              else "audio by paper2audio")
     out_path = args.output or args.pdf.with_suffix(".mp3")
-    duration = synthesize(playlist, out_path, args.voice, args.speed)
+    duration = synthesize(playlist, out_path, args.voice, args.speed,
+                          tags={"title": title, "artist": artist})
     print(f"done: {out_path}  ({duration / 60:.1f} min)")
 
 

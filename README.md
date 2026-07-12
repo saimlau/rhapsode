@@ -18,6 +18,10 @@ two-column reading order. What gets skipped: author list, affiliations,
 page headers/footers, figure/table captions, citation brackets like
 `[12]`, and everything from the References heading onward.
 
+The MP3 is ID3-tagged with the paper title (`title`) and the author
+list plus "(audio by paper2audio)" (`artist`), so it shows up properly
+in podcast/music players.
+
 ## Setup (already done on this machine)
 
 ```bash
