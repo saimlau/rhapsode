@@ -129,6 +129,25 @@ def extract_segments(pdf_path):
     return segments, False
 
 
+def merge_continuations(segments):
+    """Join body blocks split mid-sentence at column/page breaks.
+
+    A block that doesn't end in sentence-terminal punctuation continues in
+    the next body block; joining with a newline lets clean_text de-hyphenate
+    across the break. Wrongly merging two paragraphs only costs a pause, so
+    bias toward merging.
+    """
+    merged = []
+    for kind, text in segments:
+        prev_end = merged[-1][1].rstrip().rstrip("\"”’)»") if merged else ""
+        if (kind == "body" and merged and merged[-1][0] == "body"
+                and not prev_end.endswith((".", "!", "?"))):
+            merged[-1] = ("body", merged[-1][1].rstrip() + "\n" + text)
+        else:
+            merged.append([kind, text])
+    return [(kind, text) for kind, text in merged]
+
+
 # ------------------------------------------------------------------ cleaning
 
 def clean_text(text):
@@ -226,6 +245,7 @@ def main():
         sys.exit(f"error: no such file: {args.pdf}")
 
     segments, found_references = extract_segments(args.pdf)
+    segments = merge_continuations(segments)
     while segments and segments[-1][0] == "heading":
         segments.pop()  # orphan trailing heading (e.g. Declarations with small-font body)
     total_chars = sum(len(t) for _, t in segments)
