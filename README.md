@@ -75,6 +75,17 @@ python3 -m venv .venv
 Requires `ffmpeg` and `espeak-ng` on the system. First run downloads the
 ~330 MB Kokoro model from Hugging Face; after that it is fully offline.
 
+## GROBID (primary extractor)
+
+Structure extraction uses [GROBID](https://github.com/kermitt2/grobid)
+when available — the standard ML pipeline for scholarly PDFs — with the
+built-in heuristics as offline fallback (`--no-grobid` forces them).
+Native install expected at `[grobid] home` (see config): GROBID source
++ `jdk/` subdir with JDK 17, built once with
+`JAVA_HOME=$PWD/jdk ./gradlew clean install -x test`. The service is
+auto-started on demand and gives per-sentence coordinates, so read-along
+highlighting works identically on both backends.
+
 ## Notes
 
 - Heuristics (font-size thresholds, header/footer zones) were tuned on
