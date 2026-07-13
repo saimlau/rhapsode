@@ -27,7 +27,7 @@ body { background: var(--desk); font-family: var(--sans); }
 /* ---------------------------------------------------------------- pages */
 #pages { max-width: 860px; margin: 0 auto; padding: 28px 12px 190px; }
 .page { position: relative; margin: 0 0 18px; box-shadow: var(--page-shadow); }
-.page img { display: block; width: 100%; height: auto; }
+.page img { display: block; width: 100%; height: auto; user-select: none; }
 .pageno {
   position: absolute; top: 4px; right: -34px; width: 28px; text-align: left;
   font: 11px var(--mono); color: var(--panel-muted); user-select: none;
@@ -196,7 +196,7 @@ function init() {
     div.className = "page";
     div.dataset.n = p.n;
     div.style.aspectRatio = `${p.w} / ${p.h}`;
-    div.innerHTML = `<img src="${p.png}" alt="page ${p.n + 1}">` +
+    div.innerHTML = `<img src="${p.png}" alt="page ${p.n + 1}" draggable="false">` +
       `<div class="pageno">${p.n + 1}</div><div class="textlayer"></div>`;
     pagesEl.appendChild(div);
     pageEls.push(div);
@@ -218,19 +218,38 @@ function init() {
     const layer = pageEl.querySelector(".textlayer");
     if (layer.childElementCount) return;
     const scale = pageEl.clientWidth / p.w, frag = document.createDocumentFragment();
-    for (const [x0, y0, x1, y1, w] of DATA.textLayer[n]) {
-      const s = document.createElement("span");
-      s.textContent = w + " ";
-      // scaleX maps our font's glyph run onto the PDF word's exact width;
-      // the ratio is resize-invariant (both terms scale with the container)
-      const fsPt = (y1 - y0) * .82;
+    // cluster consecutive words into visual lines: uniform top/height per line
+    // makes selection paint as clean bands instead of per-word ragged boxes
+    const lines = [];
+    let cur = null;
+    for (const w of DATA.textLayer[n]) {
+      const [, y0, , y1] = w;
+      if (cur && Math.min(cur.y1, y1) - Math.max(cur.y0, y0) >
+          .5 * Math.min(y1 - y0, cur.y1 - cur.y0)) {
+        cur.words.push(w);
+        cur.y0 = Math.min(cur.y0, y0);
+        cur.y1 = Math.max(cur.y1, y1);
+      } else {
+        cur = { y0, y1, words: [w] };
+        lines.push(cur);
+      }
+    }
+    for (const ln of lines) {
+      const h = ln.y1 - ln.y0, fsPt = h * .82;
       measure.font = `${fsPt}px sans-serif`;
-      const natural = measure.measureText(w).width;
-      const sx = natural > 0 ? Math.min(Math.max((x1 - x0) / natural, .3), 4) : 1;
-      s.style.cssText = `left:${x0 / p.w * 100}%;top:${y0 / p.h * 100}%;` +
-        `font-size:${Math.max(fsPt * scale, 4)}px;` +
-        `line-height:${(y1 - y0) * scale}px;transform:scaleX(${sx.toFixed(4)})`;
-      frag.appendChild(s);
+      for (const [x0, , x1, , w] of ln.words) {
+        const s = document.createElement("span");
+        s.textContent = w + " ";
+        // scaleX maps our font's glyph run onto the PDF word's exact width;
+        // the ratio is resize-invariant (both terms scale with the container)
+        const natural = measure.measureText(w).width;
+        const sx = natural > 0 ? Math.min(Math.max((x1 - x0) / natural, .3), 4) : 1;
+        s.dataset.h = h;
+        s.style.cssText = `left:${x0 / p.w * 100}%;top:${ln.y0 / p.h * 100}%;` +
+          `font-size:${Math.max(fsPt * scale, 4)}px;` +
+          `line-height:${h * scale}px;transform:scaleX(${sx.toFixed(4)})`;
+        frag.appendChild(s);
+      }
     }
     layer.appendChild(frag);
   };
@@ -429,9 +448,8 @@ function init() {
   let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => {
     document.querySelectorAll(".page").forEach(pe => {
       const p = DATA.pages[+pe.dataset.n], scale = pe.clientWidth / p.w;
-      const words = DATA.textLayer[+pe.dataset.n];
-      pe.querySelectorAll(".textlayer span").forEach((s, i) => {
-        const h = (words[i][3] - words[i][1]) * scale;
+      pe.querySelectorAll(".textlayer span").forEach(s => {
+        const h = +s.dataset.h * scale;
         s.style.fontSize = Math.max(h * .82, 4) + "px";
         s.style.lineHeight = h + "px";
       });
