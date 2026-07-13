@@ -21,6 +21,10 @@
   :root { --desk: #1B1A18; --page-shadow: 0 2px 18px rgba(0, 0, 0, .55); }
 }
 * { box-sizing: border-box; }
+html { scrollbar-width: thin; scrollbar-color: rgba(40, 33, 20, .28) transparent; }
+@media (prefers-color-scheme: dark) {
+  html { scrollbar-color: rgba(255, 250, 235, .22) transparent; }
+}
 html, body { margin: 0; }
 body { background: var(--desk); font-family: var(--sans); }
 

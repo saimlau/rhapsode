@@ -25,7 +25,11 @@
     --error: #E09287;
   }
 }
-* { box-sizing: border-box; }
+* { box-sizing: border-box; scrollbar-width: thin;
+    scrollbar-color: rgba(40, 33, 20, .28) transparent; }
+@media (prefers-color-scheme: dark) {
+  * { scrollbar-color: rgba(255, 250, 235, .22) transparent; }
+}
 html, body { margin: 0; height: 100%; }
 body { display: flex; background: var(--desk); font-family: var(--sans);
        color: var(--ink); }
