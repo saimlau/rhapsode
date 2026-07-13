@@ -33,12 +33,40 @@ _PIPELINE = None  # warm Kokoro model, reused across papers in one process
 TTS_LOCK = threading.Lock()  # one inference at a time (worker + /tts endpoint)
 
 
-def prepare_units(pdf_path):
-    """Extract and clean a paper. Returns (units, meta, warnings).
+def prepare_units(pdf_path, grobid_cfg=None):
+    """Extract and clean a paper. Returns (units, meta, warnings); units are
+    {kind, text, rects, para_end, pause}. GROBID is the primary backend when
+    configured; the built-in heuristics are the fallback.
 
     Raises ValueError for PDFs with no usable text (scanned/image-only).
     """
-    warnings = []
+    if grobid_cfg and grobid_cfg.get("enabled"):
+        import grobid
+        try:
+            if grobid.ensure(grobid_cfg["url"],
+                             home=grobid_cfg.get("home"),
+                             autostart=grobid_cfg.get("autostart", True)):
+                units, meta, warnings = grobid.extract(pdf_path,
+                                                       grobid_cfg["url"])
+                for u in units:
+                    u["text"] = clean_text(u["text"])
+                    u["pause"] = (HEADING_PAUSE_S if u["kind"] == "heading"
+                                  else PARAGRAPH_PAUSE_S if u["para_end"]
+                                  else SENTENCE_PAUSE_S)
+                units = [u for u in units if u["text"]]
+                if meta.get("year") is None:
+                    from extraction import _page_year
+                    meta["year"] = _page_year(fitz.open(pdf_path)[0])
+                return units, meta, warnings
+            warnings = ["GROBID unavailable; using built-in extraction"]
+        except ValueError:
+            raise
+        except Exception as e:
+            warnings = [f"GROBID failed ({type(e).__name__}: {e}); "
+                        f"using built-in extraction"]
+    else:
+        warnings = []
+
     segments, found_references, meta = extract_segments(pdf_path)
     segments = merge_continuations(segments)
     while segments and segments[-1][0] == "heading":
@@ -54,14 +82,17 @@ def prepare_units(pdf_path):
         if not cleaned.text:
             continue
         if kind == "heading":
-            units.append({"kind": "heading", "mt": cleaned,
+            units.append({"kind": "heading", "text": cleaned.text,
+                          "rects": cleaned.rects(), "para_end": False,
                           "pause": HEADING_PAUSE_S})
         else:
             sentences = split_sentences(cleaned)
             for j, sentence in enumerate(sentences):
                 last = j == len(sentences) - 1
-                units.append({"kind": "body", "mt": sentence,
-                              "pause": PARAGRAPH_PAUSE_S if last else SENTENCE_PAUSE_S})
+                units.append({"kind": "body", "text": sentence.text,
+                              "rects": sentence.rects(), "para_end": last,
+                              "pause": PARAGRAPH_PAUSE_S if last
+                              else SENTENCE_PAUSE_S})
     return units, meta, warnings
 
 
@@ -101,7 +132,7 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None):
 
     parts, samples = [], 0
     for i, unit in enumerate(units, 1):
-        text = unit["mt"].text
+        text = unit["text"]
         if progress:
             progress(i, len(units), text)
         else:
@@ -158,9 +189,9 @@ def build_manifest(pdf_path, units, meta, title, artist, duration):
     manifest_units = []
     for unit in units:
         manifest_units.append({
-            "kind": unit["kind"], "text": unit["mt"].text,
+            "kind": unit["kind"], "text": unit["text"],
             "t0": round(unit["t0"], 3), "t1": round(unit["t1"], 3),
-            "rects": unit["mt"].rects(), "words": unit["words"],
+            "rects": unit["rects"], "words": unit["words"],
         })
     sections = [{"title": u["text"], "t0": u["t0"]}
                 for u in manifest_units if u["kind"] == "heading"]
@@ -190,9 +221,10 @@ def write_viewer(out_dir, manifest):
     (out_dir / "manifest.json").write_text(data, encoding="utf-8")
 
 
-def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None):
+def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
+                       grobid_cfg=None):
     """Full pipeline: PDF -> readalong bundle in out_dir. Returns summary dict."""
-    units, meta, warnings = prepare_units(pdf_path)
+    units, meta, warnings = prepare_units(pdf_path, grobid_cfg)
     tags = make_tags(pdf_path, meta)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "narration.mp3").unlink(missing_ok=True)  # pre-m4a leftover
@@ -236,13 +268,16 @@ def main():
                         help="port for --gui")
     parser.add_argument("--no-open", action="store_true",
                         help="with --gui: don't open a browser")
+    parser.add_argument("--no-grobid", action="store_true",
+                        help="skip GROBID; use the built-in extractor")
     args = parser.parse_args()
+    grobid_cfg = None if args.no_grobid else cfg["grobid"]
 
     if args.gui:
         import server
         server.run(args.library, args.port, voice=args.voice,
                    speed=args.speed, dpi=args.dpi,
-                   open_browser=not args.no_open)
+                   open_browser=not args.no_open, grobid_cfg=grobid_cfg)
         return
 
     if args.pdf is None:
@@ -251,17 +286,26 @@ def main():
         sys.exit(f"error: no such file: {args.pdf}")
 
     if args.text_only:
-        segments, found_references, _ = extract_segments(args.pdf)
-        segments = merge_continuations(segments)
-        while segments and segments[-1][0] == "heading":
-            segments.pop()
-        if not found_references:
-            print("warning: no References heading found; reading to the end "
-                  "of the PDF", file=sys.stderr)
-        for kind, mt in segments:
-            text = clean_mapped(mt).text
-            if text:
-                print(f"\n## {text}" if kind == "heading" else f"\n{text}")
+        try:
+            units, _, warnings = prepare_units(args.pdf, grobid_cfg)
+        except ValueError as e:
+            sys.exit(f"error: {e}")
+        for w in warnings:
+            print(f"warning: {w}", file=sys.stderr)
+        paragraph = []
+        for u in units:
+            if u["kind"] == "heading":
+                if paragraph:
+                    print("\n" + " ".join(paragraph))
+                    paragraph = []
+                print(f"\n## {u['text']}")
+            else:
+                paragraph.append(u["text"])
+                if u["para_end"]:
+                    print("\n" + " ".join(paragraph))
+                    paragraph = []
+        if paragraph:
+            print("\n" + " ".join(paragraph))
         return
 
     if args.readalong or args.play:
@@ -270,7 +314,8 @@ def main():
         if args.readalong or not index.is_file():
             try:
                 info = generate_readalong(args.pdf, out_dir, args.voice,
-                                          args.speed, args.dpi)
+                                          args.speed, args.dpi,
+                                          grobid_cfg=grobid_cfg)
             except ValueError as e:
                 sys.exit(f"error: {e}")
             for w in info["warnings"]:
@@ -283,12 +328,12 @@ def main():
         return
 
     try:
-        units, meta, warnings = prepare_units(args.pdf)
+        units, meta, warnings = prepare_units(args.pdf, grobid_cfg)
     except ValueError as e:
         sys.exit(f"error: {e}")
     for w in warnings:
         print(f"warning: {w}")
-    words = sum(len(u["mt"].text.split()) for u in units)
+    words = sum(len(u["text"].split()) for u in units)
     print(f"{len(units)} units, ~{words} words (~{words / 170:.0f} min of audio)")
     out_path = args.output or args.pdf.with_suffix(".mp3")
     duration = synthesize(units, out_path, args.voice, args.speed,

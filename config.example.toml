@@ -20,3 +20,14 @@ dpi = 150
 [gui]
 # Port for `paper2audio --gui` (auto-probes upward if busy).
 port = 7717
+
+[grobid]
+# GROBID (scholarly-PDF structure ML) as the primary extractor; the
+# built-in heuristics are the fallback when it's unavailable.
+enabled = true
+url = "http://127.0.0.1:8070"
+# Auto-start the service from a native GROBID source install at `home`
+# (built with `./gradlew clean install`; a jdk/ subdir with JDK 17 is
+# used automatically if present, since GROBID needs Java <= 17).
+autostart = true
+# home = "~/Documents/grobid-0.8.1"

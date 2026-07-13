@@ -75,9 +75,10 @@ class Library:
 class Worker(threading.Thread):
     """Single generation thread — the GPU is serial; the model stays warm."""
 
-    def __init__(self, lib, voice, speed, dpi):
+    def __init__(self, lib, voice, speed, dpi, grobid_cfg=None):
         super().__init__(daemon=True)
         self.lib, self.voice, self.speed, self.dpi = lib, voice, speed, dpi
+        self.grobid_cfg = grobid_cfg
         self.q = queue.Queue()
 
     def enqueue(self, pid):
@@ -103,7 +104,8 @@ class Worker(threading.Thread):
             try:
                 info = p2a.generate_readalong(
                     self.lib.pdf_path(pid), self.lib.view_dir(pid),
-                    self.voice, self.speed, self.dpi, progress)
+                    self.voice, self.speed, self.dpi, progress,
+                    grobid_cfg=self.grobid_cfg)
                 self.lib.update(pid, status="ready", progress=1.0,
                                 title=info["title"], authors=info["authors"],
                                 year=info["year"],
@@ -295,7 +297,7 @@ def _free_port(start):
     raise RuntimeError(f"no free port in {start}..{start + 9}")
 
 
-def run(root, port, voice, speed, dpi, open_browser=False):
+def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None):
     root = Path(root)
     if not root.exists() and not root.parent.exists():
         sys.exit(f"error: library location unavailable (is the volume "
@@ -303,7 +305,7 @@ def run(root, port, voice, speed, dpi, open_browser=False):
     root.mkdir(parents=True, exist_ok=True)
 
     lib = Library(root)
-    worker = Worker(lib, voice, speed, dpi)
+    worker = Worker(lib, voice, speed, dpi, grobid_cfg)
     with lib.lock:  # crash recovery: re-queue anything left mid-generation
         for pid, entry in lib.data["papers"].items():
             if entry["status"] in ("generating", "pending"):

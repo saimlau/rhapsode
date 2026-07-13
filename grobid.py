@@ -1,0 +1,187 @@
+"""GROBID extraction backend for paper2audio.
+
+GROBID (https://github.com/kermitt2/grobid) is the standard ML pipeline
+for scholarly-PDF structure. It runs as a local HTTP service (Docker,
+auto-started here); `processFulltextDocument` with sentence segmentation
+and coordinates gives us title/authors/sections/sentences with bounding
+boxes — a direct match for the read-along sync manifest.
+"""
+
+import os
+import re
+import subprocess
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import requests
+
+TEI = "{http://www.tei-c.org/ns/1.0}"
+
+
+def alive(url, timeout=2):
+    try:
+        return requests.get(f"{url}/api/isalive",
+                            timeout=timeout).status_code == 200
+    except requests.RequestException:
+        return False
+
+
+def ensure(url, home=None, autostart=True, wait_s=150):
+    """True when the service answers, starting the native service from a
+    GROBID source install (`home`) if allowed."""
+    if alive(url):
+        return True
+    if not autostart or not home:
+        return False
+    home = Path(home).expanduser()
+    dist = (home / "grobid-service/build/install/grobid-service"
+                   "/bin/grobid-service")
+    if dist.is_file():
+        cmd = [str(dist), "server",
+               str(home / "grobid-service/config/config.yaml")]
+    elif (home / "gradlew").is_file():
+        cmd = ["./gradlew", "run", "--quiet"]
+    else:
+        print(f"warning: no GROBID install at {home}")
+        return False
+    env = dict(os.environ, GROBID_HOME=str(home / "grobid-home"))
+    if (home / "jdk/bin/java").is_file():
+        env["JAVA_HOME"] = str(home / "jdk")  # bundled JDK 17 (GROBID
+        env["PATH"] = f"{home}/jdk/bin:{env.get('PATH', '')}"  # needs <=17)
+    subprocess.Popen(cmd, cwd=home, env=env,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print("starting GROBID service (first start loads models)...")
+    for _ in range(wait_s):
+        if alive(url):
+            return True
+        time.sleep(1)
+    return False
+
+
+def _coords_to_rects(coords):
+    """TEI coords 'page,x,y,w,h;...' -> [[page0, x0, y0, x1, y1], ...]."""
+    rects = []
+    for part in (coords or "").split(";"):
+        vals = part.split(",")
+        if len(vals) != 5:
+            continue
+        try:
+            p, x, y, w, h = (float(v) for v in vals)
+        except ValueError:
+            continue
+        rects.append([int(p) - 1, round(x, 2), round(y, 2),
+                      round(x + w, 2), round(y + h, 2)])
+    return rects
+
+
+def _text(el):
+    """Element text without citation markers and footnote refs."""
+    parts = []
+
+    def walk(node):
+        if node.tag in (TEI + "ref", TEI + "note"):
+            if node.tail:
+                parts.append(node.tail)
+            return
+        if node.text:
+            parts.append(node.text)
+        for child in node:
+            walk(child)
+        if node.tail:
+            parts.append(node.tail)
+
+    walk(el)
+    text = "".join(parts)
+    if el.tail:  # the root element's tail belongs to its parent
+        text = text[: len(text) - len(el.tail)]
+    return " ".join(text.split())
+
+
+def _sentences(container, units):
+    """Append body units for every <p>/<s> under `container`."""
+    for p in container.findall(TEI + "p"):
+        added = []
+        for s in p.findall(TEI + "s"):
+            text = _text(s)
+            if len(text) > 1:
+                added.append({"kind": "body", "text": text,
+                              "rects": _coords_to_rects(s.get("coords")),
+                              "para_end": False})
+        if added:
+            added[-1]["para_end"] = True
+            units.extend(added)
+
+
+def extract(pdf_path, url, timeout=180):
+    """Returns (units, meta, warnings): units = {kind, text, rects,
+    para_end}; meta = {title, authors, year}. Raises on service errors."""
+    with open(pdf_path, "rb") as f:
+        resp = requests.post(
+            f"{url}/api/processFulltextDocument",
+            files={"input": f},
+            data={"segmentSentences": "1",
+                  "teiCoordinates": ["title", "head", "s"]},
+            timeout=timeout)
+    resp.raise_for_status()
+    root = ET.fromstring(resp.content)
+    warnings = []
+
+    meta = {"title": None, "authors": None, "year": None}
+    title_el = root.find(f".//{TEI}titleStmt/{TEI}title")
+    if title_el is not None and _text(title_el):
+        meta["title"] = _text(title_el)
+    names = []
+    junk = re.compile(r"(?i)sciencedirect|elsevier|springer|ieee|acta|"
+                      r"journal|proceedings|conference|universit")
+    for pers in root.findall(f".//{TEI}sourceDesc//{TEI}author/{TEI}persName"):
+        parts = ([_text(e) for e in pers.findall(TEI + "forename")]
+                 + [_text(e) for e in pers.findall(TEI + "surname")])
+        name = " ".join(p for p in parts if p)
+        words = name.split()
+        # GROBID sometimes swallows banner/journal text as an "author"
+        if name and not junk.search(name) and len(set(words)) == len(words):
+            names.append(name)
+    if names:
+        meta["authors"] = ", ".join(names)
+    date = root.find(f".//{TEI}publicationStmt/{TEI}date")
+    for source in ((date.get("when") if date is not None else None),
+                   (_text(date) if date is not None else None)):
+        m = re.search(r"\b(19[5-9]\d|20[0-3]\d)\b", source or "")
+        if m:
+            meta["year"] = int(m.group())
+            break
+
+    units = []
+    if meta["title"]:
+        units.append({"kind": "heading", "text": meta["title"],
+                      "rects": _coords_to_rects(title_el.get("coords")),
+                      "para_end": False})
+    abstract = root.find(f".//{TEI}profileDesc/{TEI}abstract")
+    if abstract is not None:
+        units.append({"kind": "heading", "text": "Abstract.",
+                      "rects": [], "para_end": False})
+        for div in abstract.findall(f".//{TEI}div") or [abstract]:
+            _sentences(div, units)
+
+    body = root.find(f".//{TEI}text/{TEI}body")
+    if body is not None:
+        for div in body.findall(TEI + "div"):
+            head = div.find(TEI + "head")
+            if head is not None and _text(head):
+                n = head.get("n", "")
+                text = (f"{n} {_text(head)}".strip() if n else _text(head))
+                # figure-reference fragments occasionally parse as heads
+                if re.search(r"[A-Za-z]{3}", text):
+                    units.append({"kind": "heading", "text": text,
+                                  "rects": _coords_to_rects(head.get("coords")),
+                                  "para_end": False})
+            _sentences(div, units)
+
+    if sum(len(u["text"]) for u in units) < 500:
+        raise ValueError("GROBID returned almost no text")
+    covered = sum(1 for u in units if u["rects"])
+    if covered < 0.8 * len(units):
+        warnings.append(f"GROBID coordinates missing for "
+                        f"{len(units) - covered}/{len(units)} units")
+    return units, meta, warnings
