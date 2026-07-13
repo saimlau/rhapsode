@@ -188,11 +188,15 @@ def _body_font_size(doc):
 
 
 def _block_mapped(block, page_no):
-    """(MappedText, dominant font size, bold char fraction, line count)."""
+    """(MappedText, dominant size, bold fraction, line count, bold prefix).
+
+    bold prefix = char count of the leading run of bold spans on the first
+    line — run-in headings ('1. INTRODUCTION Craniofacial...') live there."""
     size_weight = {}
     chars, metas = [], []
     bold_chars = total_chars = 0
-    for line in block["lines"]:
+    bold_prefix, prefix_open = 0, True
+    for line_no, line in enumerate(block["lines"]):
         if chars:
             chars.append("\n")
             metas.append(None)
@@ -200,14 +204,20 @@ def _block_mapped(block, page_no):
             key = round(span["size"], 1)
             size_weight[key] = size_weight.get(key, 0) + len(span["chars"])
             total_chars += len(span["chars"])
-            if span["flags"] & 16:  # bold bit
+            span_bold = bool(span["flags"] & 16)
+            if span_bold:
                 bold_chars += len(span["chars"])
+            if line_no == 0 and prefix_open and span_bold:
+                bold_prefix += len(span["chars"])
+            else:
+                prefix_open = False
             for ch in span["chars"]:
                 chars.append(ch["c"])
                 metas.append((page_no, tuple(ch["bbox"])))
     size = max(size_weight, key=size_weight.get) if size_weight else 0.0
     bold = bold_chars / total_chars if total_chars else 0.0
-    return MappedText("".join(chars), metas), size, bold, len(block["lines"])
+    return (MappedText("".join(chars), metas), size, bold,
+            len(block["lines"]), bold_prefix)
 
 
 def _order_blocks(blocks, page_width):
@@ -235,6 +245,43 @@ def _order_blocks(blocks, page_width):
     return ordered
 
 
+AFFILIATION_RE = re.compile(
+    r"\b(Universit|Department|Institute|Laborator|School of|College|"
+    r"Center for|Centre|Faculty|Hospital|Academy)", re.I)
+EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.\w")
+NUMBERED_HEADING = re.compile(r"^\d+(\.\d+)*\.?\s+\S")
+SECTION_KEYWORD = re.compile(r"^(abstract|keywords?|index terms)\b", re.I)
+PAPER_NUMBER = re.compile(r"^[A-Z]{2,}\d{4}-\d+")
+
+
+def _strip_superscripts(mt):
+    """Text with sub/superscript characters removed — affiliation markers
+    ('1,2', 'a,b,c', '∗') are visibly smaller than the name characters.
+    Whitespace always survives (space glyphs have degenerate boxes)."""
+    heights = sorted(m[1][3] - m[1][1] for c, m in zip(mt.text, mt.meta)
+                     if m and not c.isspace())
+    if not heights:
+        return mt.text
+    cutoff = 0.75 * heights[len(heights) // 2]
+    return "".join(c for c, m in zip(mt.text, mt.meta)
+                   if c.isspace() or m is None
+                   or (m[1][3] - m[1][1]) >= cutoff)
+
+
+def _leading_name_lines(mt):
+    """The top lines of a block up to the first affiliation/email line —
+    IEEE puts authors and affiliations in one block."""
+    end = 0
+    for line in mt.text.split("\n"):
+        flat = " ".join(line.split())
+        if AFFILIATION_RE.search(flat) and not _looks_like_names(flat):
+            break
+        if EMAIL_RE.search(flat):
+            break
+        end += len(line) + 1
+    return mt.slice(0, min(end, len(mt))).strip()
+
+
 def _is_author_list(text):
     return text.count("·") >= 2 and re.search(r"\d(?:,\d+)*\s*·", text)
 
@@ -246,31 +293,71 @@ def _name_fragment(text):
             and all(w[0].isalpha() and w[0].isupper() for w in words))
 
 
+def _name_words(part):
+    """Tokens that plausibly belong to a name: drops detached affiliation
+    markers ('2', 'a', '∗') that survive superscript stripping."""
+    return [w for w in part.split()
+            if not w.isdigit() and not (len(w) == 1 and not w.isupper())]
+
+
 def _looks_like_names(text):
-    """Comma-separated author line: several 'First Last'-shaped parts."""
-    parts = [p.strip() for p in text.split(",")]
-    namish = sum(1 for p in parts
-                 if len(p.split()) >= 2
-                 and all(w[0].isupper() for w in p.split() if w[0].isalpha()))
-    return len(parts) >= 3 and namish >= 2
+    """Author line: several 'First Last'-shaped parts joined by commas/and."""
+    if len(text) > 250:
+        return False
+    text = re.sub(r"\([^)]*\)", " ", text)  # honorifics: "(Member, IEEE)"
+    parts = [p.strip(" .∗*†‡") for p in re.split(r",|\band\b", text, flags=re.I)]
+    parts = [p for p in parts if len(p) > 2]
+    def namish(p):
+        words = _name_words(p)
+        return (2 <= len(words) <= 4
+                and all(w[0].isalpha() and w[0].isupper() for w in words))
+    n = sum(map(namish, parts))
+    return n >= 2 and n >= 0.6 * len(parts)
+
+
+def _is_affiliation(text):
+    """Affiliation/correspondence block on the first page."""
+    hits = len(AFFILIATION_RE.findall(text))
+    return (EMAIL_RE.search(text) is not None or hits >= 2
+            or (hits >= 1 and bool(re.match(r"^[0-9a-f]\b", text))))
+
+
+def _caps_heading(flat):
+    """ALL-CAPS section headings ('REFERENCES', '1. INTRODUCTION')."""
+    letters = [c for c in flat if c.isalpha()]
+    return (len(flat) >= 6 and len(letters) >= 5
+            and sum(c.isupper() for c in letters) / len(letters) >= 0.85)
+
+
+def _collapse_spaced(flat):
+    """Elsevier letter-spaced headings: 'a b s t r a c t' -> 'abstract'."""
+    if re.fullmatch(r"(?:\w )+\w", flat):
+        return flat.replace(" ", "")
+    return None
+
+
+def _strip_tex(s):
+    """PDF metadata titles sometimes carry LaTeX macro residue."""
+    return re.sub(r"\\[A-Za-z@]+\s*", "", s or "").strip()
+
+
+def _norm(s):
+    return re.sub(r"[^a-z0-9]+", "", s.lower())
 
 
 def _parse_authors(mt):
-    """Author names from a MappedText author line. Superscript affiliation
-    markers (Springer's '1,2', Elsevier's 'a,b,c') are stripped by glyph
-    height — superscripts are visibly smaller than the name characters."""
-    heights = sorted(m[1][3] - m[1][1] for m in mt.meta if m)
-    if heights:
-        cutoff = 0.75 * heights[len(heights) // 2]
-        kept = [(c, m) for c, m in zip(mt.text, mt.meta)
-                if m is None or (m[1][3] - m[1][1]) >= cutoff]
-        text = "".join(c for c, _ in kept)
-    else:
-        text = mt.text
-    text = re.sub(r"[‐‑‒­]", "-", " ".join(text.split()))
-    sep = "·" if "·" in text else ","
-    names = [re.sub(r"[\d\s*,]+$", "", n).strip(" .") for n in text.split(sep)]
-    return ", ".join(n for n in names if len(n) > 1)
+    """Author names from a MappedText author line (superscripts stripped)."""
+    text = re.sub(r"[‐‑‒­]", "-", " ".join(_strip_superscripts(mt).split()))
+    text = re.sub(r"\([^)]*\)", " ", text)
+    parts = (text.split("·") if "·" in text
+             else re.split(r",|\band\b", text, flags=re.I))
+    names = []
+    for part in parts:
+        words = [re.sub(r"\d+$", "", w) for w in _name_words(part)]
+        name = " ".join(w for w in words if w).strip(" .∗*†‡")
+        if len(name) > 1:
+            names.append(name)
+    return ", ".join(names)
 
 
 def _page_year(page):
@@ -297,6 +384,34 @@ def extract_segments(pdf_path):
     meta = {"title": None, "authors": None,
             "year": _page_year(doc[0]) if len(doc) else None}
     title_size = 0.0
+    title_idx = -1        # segment index of the title (for multi-block titles)
+    title_locked = False  # metadata-confirmed title beats size-based choice
+    saw_content = False   # page-0 front matter (authors/affiliations) ends
+                          # at the first section heading or long prose block
+    meta_title = _norm(_strip_tex(doc.metadata.get("title")))[:60]
+    if len(meta_title) < 15:
+        meta_title = ""
+
+    # journal names and banners repeat in later pages' running headers —
+    # collect those texts to disqualify look-alike page-0 headings as titles
+    header_texts = []
+    for page in list(doc)[1:5]:
+        height = page.rect.height
+        for block in page.get_text("dict")["blocks"]:
+            if block["type"] == 0 and (block["bbox"][3] < 0.07 * height
+                                       or block["bbox"][1] > 0.92 * height):
+                text = " ".join("".join(s["text"] for l in block["lines"]
+                                        for s in l["spans"]).split()).lower()
+                if text:
+                    header_texts.append(text)
+
+    def is_banner(flat):
+        if BANNERS.match(flat) or PAPER_NUMBER.match(flat):
+            return True
+        # short heading repeated in running headers = journal name; long ones
+        # are excluded because IEEE-style headers repeat the paper title
+        fl = flat.lower()
+        return 6 <= len(fl) <= 45 and any(fl in h for h in header_texts)
 
     for page_no, page in enumerate(doc):
         height = page.rect.height
@@ -305,44 +420,137 @@ def extract_segments(pdf_path):
             _, y0, _, y1 = block["bbox"]
             if y1 < 0.07 * height or y0 > 0.92 * height:
                 continue  # running header / footer zone
-            mt, size, bold, n_lines = _block_mapped(block, page_no)
+            mt, size, bold, n_lines, bold_prefix = _block_mapped(block, page_no)
             flat = " ".join(mt.text.split())
             if not flat:
                 continue
-            if size < body_size - 1.1:
-                continue  # captions, affiliations, received/copyright lines
-            if page_no == 0 and _is_author_list(flat):
+            small = size < body_size - 1.1
+            front = page_no == 0 and not saw_content
+            if small and not front:
+                continue  # captions, footnotes, received/copyright lines
+            if flat.startswith("©"):
+                continue  # copyright lines
+
+            # references heading glued mid-block to the preceding section
+            stop = re.search(r"(?m)^\s*(references|bibliography|literature"
+                             r"\s+cited)\s*$", mt.text, re.I)
+            if stop:
+                head = mt.slice(0, stop.start()).strip()
+                if head.text:
+                    segments.append(("body", head))
+                return segments, True, meta
+
+            # run-in heading: bold lead on the first line, prose follows
+            # ("1. INTRODUCTION Craniomaxillofacial...", "ABSTRACT Orthog...")
+            if 3 <= bold_prefix <= 80 and len(mt) - bold_prefix > 30:
+                prefix = " ".join(mt.text[:bold_prefix].split())
+                if (NUMBERED_HEADING.match(prefix) or _caps_heading(prefix)
+                        or SECTION_KEYWORD.match(prefix)):
+                    if STOP_HEADINGS.match(prefix):
+                        return segments, True, meta
+                    rest = mt.slice(bold_prefix, len(mt)).strip()
+                    rest = rest.sub(r"^[:.\s—–-]+", "")
+                    if re.match(r"^(keywords?|index terms)", prefix, re.I):
+                        rest = rest.sub(r"\s*[·;]\s*", ", ")
+                    saw_content = True
+                    segments.append(("heading", mt.slice(0, bold_prefix).strip()))
+                    segments.append(("body", rest))
+                    continue
+
+            stripped = " ".join(_strip_superscripts(mt).split())
+            if front and _is_author_list(flat):
                 meta["authors"] = _parse_authors(mt)
                 continue
+            if front and meta["title"] is not None:
+                names = _leading_name_lines(mt)
+                nstripped = " ".join(_strip_superscripts(names).split())
+                if names.text and _looks_like_names(nstripped):
+                    parsed = _parse_authors(names)
+                    meta["authors"] = (meta["authors"] + ", " + parsed
+                                       if meta["authors"] else parsed)
+                    continue
+                if meta["authors"] and _name_fragment(stripped):
+                    meta["authors"] += ", " + _parse_authors(mt)
+                    continue
+            if front and (AFFILIATION_RE.search(flat)
+                          or EMAIL_RE.search(flat)):
+                continue  # affiliation / correspondence front matter
+            if page_no == 0 and flat.startswith(
+                    ("Article history", "ARTICLE INFO", "Available online",
+                     "Received ")):
+                continue  # Elsevier/IEEE article-info furniture
+            if front and small:
+                continue  # small front-matter block that isn't an author line
+                          # (IEEE small-caps author blocks dip below body size,
+                          # so small blocks get an author-capture chance first)
+
             is_heading = ((size >= body_size + 0.8
-                           or (bold >= 0.9 and n_lines <= 2))
-                          and len(flat) < 120)
+                           or (bold >= 0.9 and n_lines <= 2)
+                           or (_caps_heading(flat) and n_lines <= 2
+                               and len(flat) < 90))
+                          and len(flat) < (200 if size >= body_size + 2
+                                           else 120))
+
+            if is_heading:
+                collapsed = _collapse_spaced(flat)
+                if collapsed:  # "a b s t r a c t" -> "abstract"
+                    if collapsed.lower() in ("articleinfo", "articlehistory"):
+                        continue
+                    despaced = [(c, m) for c, m in zip(mt.text, mt.meta)
+                                if c != " "]
+                    mt = MappedText("".join(c for c, _ in despaced),
+                                    [m for _, m in despaced])
+                    flat = collapsed.capitalize()
+                    mt = MappedText(flat, mt.meta)
+
             if is_heading and STOP_HEADINGS.match(flat):
                 return segments, True, meta
-            if is_heading and page_no == 0 and meta["title"] is not None:
-                if meta["authors"] is None and _looks_like_names(flat):
-                    meta["authors"] = _parse_authors(mt)  # Elsevier author line
-                    continue
-                if meta["authors"] and _name_fragment(flat):
-                    meta["authors"] += ", " + _parse_authors(mt)  # wrapped names
-                    continue
+
+            if is_heading and re.match(r"(?i)(abstract\b|keywords?\b|"
+                                       r"index terms\b|introduction\b|"
+                                       r"\d+[.\s]|[ivx]+\.\s)", flat):
+                saw_content = True  # front matter ends at the first section
+
             if is_heading:
-                if page_no == 0 and size > title_size and not BANNERS.match(flat):
-                    meta["title"] = flat
-                    title_size = size
-                    # publisher banners ("ScienceDirect") sit above the real
-                    # title; drop any heading collected before it on page 0
+                meta_match = (meta_title and _norm(flat)
+                              and (meta_title.startswith(_norm(flat)[:40])
+                                   or _norm(flat).startswith(meta_title[:40])))
+                if page_no == 0 and not title_locked and meta_match:
+                    # metadata-confirmed title wins regardless of font size
                     segments = [s for s in segments if s[0] != "heading"]
+                    meta["title"], title_size, title_locked = flat, size, True
+                    title_idx = len(segments)
+                elif (page_no == 0 and not title_locked
+                        and size > title_size and not is_banner(flat)):
+                    segments = [s for s in segments if s[0] != "heading"]
+                    meta["title"], title_size = flat, size
+                    title_idx = len(segments)
+                elif (page_no == 0 and title_idx == len(segments) - 1
+                        and abs(size - title_size) < 0.3):
+                    # continuation line of a multi-block title
+                    meta["title"] += " " + flat
+                    _, tmt = segments[title_idx]
+                    segments[title_idx] = ("heading",
+                                           tmt + MappedText.plain(" ") + mt)
+                    continue
                 segments.append(("heading", mt))
             elif page_no == 0 and flat.startswith("Abstract"):
+                saw_content = True
                 segments.append(("heading", MappedText.plain("Abstract.")))
-                segments.append(("body", mt.sub(r"^\s*Abstract\s*", "")))
+                segments.append(("body", mt.sub(r"^\s*Abstract\s*[:.—–-]*\s*", "")))
             elif page_no == 0 and flat.startswith("Keywords"):
-                kw = mt.sub(r"^\s*Keywords\s*", "Keywords: ")
-                kw = kw.sub(r"\s*·\s*", ", ") + MappedText.plain(".")
+                kw = mt.sub(r"^\s*Keywords?\s*[:.—–-]*\s*", "Keywords: ")
+                kw = kw.sub(r"\s*[·;]\s*", ", ") + MappedText.plain(".")
                 segments.append(("body", kw))
             else:
+                if len(flat) > 300:
+                    saw_content = True  # long prose = the abstract has begun
                 segments.append(("body", mt))
+
+    author = " ".join(_strip_tex(doc.metadata.get("author")).split())
+    if len(author) > 3 and (not meta["authors"]
+                            or author.count(",") > meta["authors"].count(",")):
+        meta["authors"] = author  # PDF metadata is often the full, clean list
     return segments, False, meta
 
 
