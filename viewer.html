@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>paper2audio</title>
+<style>
+:root {
+  --desk: #ECEAE6;
+  --page-shadow: 0 2px 14px rgba(30, 26, 18, .18);
+  --panel-bg: rgba(24, 23, 21, .92);
+  --panel-ink: #EDEAE2;
+  --panel-muted: #8E8A80;
+  --marker: #F5B301;
+  --marker-wash: rgba(245, 179, 1, .32);
+  --serif: "New York", "Iowan Old Style", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --desk: #1B1A18; --page-shadow: 0 2px 18px rgba(0, 0, 0, .55); }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--desk); font-family: var(--sans); }
+
+/* ---------------------------------------------------------------- pages */
+#pages { max-width: 860px; margin: 0 auto; padding: 28px 12px 190px; }
+.page { position: relative; margin: 0 0 18px; box-shadow: var(--page-shadow); }
+.page img { display: block; width: 100%; height: auto; }
+.pageno {
+  position: absolute; top: 4px; right: -34px; width: 28px; text-align: left;
+  font: 11px var(--mono); color: var(--panel-muted); user-select: none;
+}
+@media (max-width: 960px) { .pageno { display: none; } }
+
+/* invisible text layer: real text over the image, for select/copy */
+.textlayer { position: absolute; inset: 0; }
+.textlayer span {
+  position: absolute; color: transparent; white-space: pre;
+  transform-origin: 0 0; cursor: text; line-height: 1;
+}
+.textlayer span::selection { background: rgba(90, 140, 255, .40); }
+
+/* sentence highlights */
+.hl { position: absolute; background: var(--marker-wash); border-radius: 2px;
+      opacity: 0; pointer-events: none; mix-blend-mode: multiply;
+      transition: opacity .25s; }
+@media (prefers-color-scheme: dark) { .hl { mix-blend-mode: normal; } }
+.hl.active { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .hl { transition: none; } }
+
+/* ---------------------------------------------------------------- panel */
+#panel {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  width: min(680px, calc(100vw - 20px));
+  background: var(--panel-bg); color: var(--panel-ink);
+  border-radius: 14px; padding: 10px 16px 12px 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .38);
+  backdrop-filter: blur(10px); user-select: none; z-index: 10;
+}
+#panel .row { display: flex; align-items: center; gap: 8px; }
+#grip {
+  width: 14px; align-self: stretch; cursor: grab; flex: none;
+  background: radial-gradient(circle, var(--panel-muted) 1px, transparent 1.2px)
+              0 0 / 5px 5px; opacity: .7; border-radius: 4px; margin-right: 2px;
+}
+#grip:active { cursor: grabbing; }
+button.ctl {
+  background: none; border: 0; color: var(--panel-ink); padding: 6px;
+  border-radius: 8px; cursor: pointer; display: grid; place-items: center;
+}
+button.ctl:hover { background: rgba(255, 255, 255, .08); }
+button.ctl svg { width: 16px; height: 16px; fill: currentColor; }
+#play svg { width: 22px; height: 22px; }
+#sectionTitle {
+  font: italic 14px/1.3 var(--serif); color: var(--panel-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1; text-align: right; opacity: .9;
+}
+.time { font: 11px var(--mono); color: var(--panel-muted); flex: none;
+        font-variant-numeric: tabular-nums; }
+
+/* the paper in miniature: section-segmented timeline */
+#timeline { position: relative; flex: 1; height: 18px; cursor: pointer; }
+#timeline .track { position: absolute; inset: 6px 0; border-radius: 3px;
+                   overflow: hidden; background: rgba(255, 255, 255, .14); }
+#timeline .seg { position: absolute; top: 0; bottom: 0;
+                 border-right: 1px solid var(--panel-bg); }
+#timeline .fill { position: absolute; inset: 6px auto 6px 0; width: 0;
+                  background: var(--marker); border-radius: 3px 0 0 3px;
+                  mix-blend-mode: screen; opacity: .85; pointer-events: none; }
+#timeline .head { position: absolute; top: 50%; width: 11px; height: 11px;
+                  border-radius: 50%; background: var(--marker);
+                  transform: translate(-50%, -50%); pointer-events: none;
+                  box-shadow: 0 0 0 3px rgba(245, 179, 1, .25); }
+#speed { font: 11px var(--mono); min-width: 44px; }
+#vol { width: 64px; accent-color: var(--marker); }
+@media (max-width: 560px) { #vol { display: none; } #sectionTitle { display: none; } }
+
+#panel.collapsed .row.lower, #panel.collapsed #sectionTitle { display: none; }
+#panel.collapsed { width: auto; padding-right: 12px; }
+
+#followChip {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 108px;
+  background: var(--marker); color: #201a05; border: 0; border-radius: 999px;
+  font: 600 12px var(--sans); padding: 7px 14px; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .3); display: none; z-index: 10;
+}
+#followChip.show { display: block; }
+
+/* ------------------------------------------------------------ context menu */
+#ctx {
+  position: fixed; display: none; z-index: 20; min-width: 170px;
+  background: var(--panel-bg); color: var(--panel-ink); border-radius: 10px;
+  padding: 5px; box-shadow: 0 8px 30px rgba(0, 0, 0, .4);
+  backdrop-filter: blur(10px); font-size: 13px;
+}
+#ctx button { display: block; width: 100%; text-align: left; background: none;
+  border: 0; color: inherit; padding: 8px 12px; border-radius: 7px;
+  cursor: pointer; font: inherit; }
+#ctx button:hover:not(:disabled) { background: rgba(255, 255, 255, .1); }
+#ctx button:disabled { opacity: .4; cursor: default; }
+
+:focus-visible { outline: 2px solid var(--marker); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+<div id="pages"></div>
+
+<div id="panel">
+  <div class="row">
+    <div id="grip" title="Drag to move · double-click to collapse"></div>
+    <button class="ctl" id="prevSec" title="Previous section  [">
+      <svg viewBox="0 0 16 16"><path d="M2 2h2v12H2zM14 2 6 8l8 6z"/></svg></button>
+    <button class="ctl" id="prevSent" title="Previous sentence  ,">
+      <svg viewBox="0 0 16 16"><path d="M11 2 4 8l7 6z"/></svg></button>
+    <button class="ctl" id="play" title="Play/pause  Space">
+      <svg id="iconPlay" viewBox="0 0 16 16"><path d="M4 2l10 6-10 6z"/></svg>
+      <svg id="iconPause" viewBox="0 0 16 16" style="display:none">
+        <path d="M3 2h3.5v12H3zM9.5 2H13v12H9.5z"/></svg></button>
+    <button class="ctl" id="nextSent" title="Next sentence  .">
+      <svg viewBox="0 0 16 16"><path d="M5 2l7 6-7 6z"/></svg></button>
+    <button class="ctl" id="nextSec" title="Next section  ]">
+      <svg viewBox="0 0 16 16"><path d="M12 2h2v12h-2zM2 2l8 6-8 6z"/></svg></button>
+    <div id="sectionTitle"></div>
+  </div>
+  <div class="row lower">
+    <span class="time" id="elapsed">0:00</span>
+    <div id="timeline"><div class="track" id="segs"></div>
+      <div class="fill" id="fill"></div><div class="head" id="head"></div></div>
+    <span class="time" id="total">0:00</span>
+    <button class="ctl" id="speed" title="Playback speed">1.0×</button>
+    <input id="vol" type="range" min="0" max="1" step="0.02" value="1"
+           title="Volume" aria-label="Volume">
+  </div>
+</div>
+
+<button id="followChip">Follow narration</button>
+
+<div id="ctx" role="menu">
+  <button id="ctxCopy" role="menuitem">Copy</button>
+  <button id="ctxStart" role="menuitem">Start from here</button>
+</div>
+
+<audio id="audio" preload="metadata"></audio>
+
+<script>
+"use strict";
+const DATA = /*__PAPER_DATA__*/null;
+if (!DATA) document.body.innerHTML = "<p style='font:15px system-ui;padding:40px'>" +
+  "No paper data. Generate this view with: paper2audio &lt;paper.pdf&gt; --readalong</p>";
+
+const $ = id => document.getElementById(id);
+const audio = $("audio");
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const store = JSON.parse(localStorage.getItem("paper2audio.viewer") || "{}");
+const save = () => localStorage.setItem("paper2audio.viewer", JSON.stringify(store));
+
+let units = [], sections = [], active = -1, follow = true, progScroll = 0;
+
+if (DATA) init();
+
+function init() {
+  document.title = DATA.title;
+  audio.src = DATA.audio;
+  units = DATA.units;
+  sections = DATA.sections;
+
+  // ---- pages, highlights, lazy text layers
+  const pagesEl = $("pages"), pageEls = [];
+  DATA.pages.forEach(p => {
+    const div = document.createElement("div");
+    div.className = "page";
+    div.dataset.n = p.n;
+    div.style.aspectRatio = `${p.w} / ${p.h}`;
+    div.innerHTML = `<img src="${p.png}" alt="page ${p.n + 1}">` +
+      `<div class="pageno">${p.n + 1}</div><div class="textlayer"></div>`;
+    pagesEl.appendChild(div);
+    pageEls.push(div);
+  });
+  units.forEach((u, i) => {
+    u.hls = u.rects.map(([pg, x0, y0, x1, y1]) => {
+      const p = DATA.pages[pg], d = document.createElement("div");
+      d.className = "hl";
+      d.style.cssText = `left:${x0 / p.w * 100}%;top:${y0 / p.h * 100}%;` +
+        `width:${(x1 - x0) / p.w * 100}%;height:${(y1 - y0) / p.h * 100}%`;
+      pageEls[pg].appendChild(d);
+      return d;
+    });
+  });
+
+  const buildTextLayer = pageEl => {
+    const n = +pageEl.dataset.n, p = DATA.pages[n];
+    const layer = pageEl.querySelector(".textlayer");
+    if (layer.childElementCount) return;
+    const scale = pageEl.clientWidth / p.w, frag = document.createDocumentFragment();
+    for (const [x0, y0, x1, y1, w] of DATA.textLayer[n]) {
+      const s = document.createElement("span");
+      s.textContent = w + " ";
+      s.style.cssText = `left:${x0 / p.w * 100}%;top:${y0 / p.h * 100}%;` +
+        `font-size:${Math.max((y1 - y0) * scale * .82, 4)}px`;
+      frag.appendChild(s);
+    }
+    layer.appendChild(frag);
+  };
+  const io = new IntersectionObserver((entries, obs) => entries.forEach(e => {
+    if (e.isIntersecting) { buildTextLayer(e.target); obs.unobserve(e.target); }
+  }), { rootMargin: "600px" });
+  pageEls.forEach(p => io.observe(p));
+
+  // ---- timeline: the paper in miniature
+  const dur = () => audio.duration || DATA.duration;
+  sections.forEach((s, i) => {
+    const seg = document.createElement("div");
+    seg.className = "seg";
+    seg.title = s.title;
+    const end = i + 1 < sections.length ? sections[i + 1].t0 : DATA.duration;
+    seg.style.left = (s.t0 / DATA.duration * 100) + "%";
+    seg.style.width = ((end - s.t0) / DATA.duration * 100) + "%";
+    $("segs").appendChild(seg);
+  });
+  $("total").textContent = fmt(DATA.duration);
+
+  const seekFromEvent = e => {
+    const r = $("timeline").getBoundingClientRect();
+    audio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur();
+    follow = true;
+  };
+  $("timeline").addEventListener("pointerdown", e => {
+    seekFromEvent(e);
+    const move = ev => seekFromEvent(ev);
+    const up = () => { removeEventListener("pointermove", move);
+                       removeEventListener("pointerup", up); };
+    addEventListener("pointermove", move);
+    addEventListener("pointerup", up);
+  });
+
+  // ---- transport
+  $("play").onclick = () => audio.paused ? audio.play() : audio.pause();
+  audio.onplay = () => { $("iconPlay").style.display = "none";
+                         $("iconPause").style.display = ""; };
+  audio.onpause = () => { $("iconPlay").style.display = "";
+                          $("iconPause").style.display = "none"; };
+  const seekUnit = i => { if (i >= 0 && i < units.length) {
+    audio.currentTime = units[i].t0 + .01; follow = true; } };
+  $("prevSent").onclick = () => seekUnit(Math.max(0, activeAt(audio.currentTime) - 1));
+  $("nextSent").onclick = () => seekUnit(Math.min(units.length - 1,
+                                                  activeAt(audio.currentTime) + 1));
+  const secAt = t => { let k = 0;
+    sections.forEach((s, i) => { if (s.t0 <= t) k = i; }); return k; };
+  $("prevSec").onclick = () => { const k = secAt(audio.currentTime);
+    audio.currentTime = audio.currentTime - sections[k].t0 > 2 || k === 0
+      ? sections[k].t0 : sections[k - 1].t0; follow = true; };
+  $("nextSec").onclick = () => { const k = secAt(audio.currentTime);
+    if (k + 1 < sections.length) audio.currentTime = sections[k + 1].t0;
+    follow = true; };
+
+  const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
+  let speedIdx = store.speedIdx ?? 1;
+  const applySpeed = () => { audio.playbackRate = SPEEDS[speedIdx];
+    $("speed").textContent = SPEEDS[speedIdx] + "×"; };
+  $("speed").onclick = () => { speedIdx = (speedIdx + 1) % SPEEDS.length;
+    store.speedIdx = speedIdx; save(); applySpeed(); };
+  applySpeed();
+
+  audio.volume = store.volume ?? 1;
+  $("vol").value = audio.volume;
+  $("vol").oninput = () => { audio.volume = +$("vol").value;
+    store.volume = audio.volume; save(); };
+
+  // ---- sync loop
+  audio.addEventListener("timeupdate", update);
+  audio.addEventListener("seeked", update);
+  function update() {
+    const t = audio.currentTime;
+    $("elapsed").textContent = fmt(t);
+    const f = Math.min(t / dur() * 100, 100);
+    $("fill").style.width = f + "%";
+    $("head").style.left = f + "%";
+    const k = secAt(t);
+    $("sectionTitle").textContent = sections[k] ? sections[k].title : "";
+    const i = activeAt(t);
+    if (i !== active) {
+      if (active >= 0) units[active].hls.forEach(d => d.classList.remove("active"));
+      active = i;
+      if (i >= 0) {
+        units[i].hls.forEach(d => d.classList.add("active"));
+        if (follow && units[i].hls.length) scrollToActive();
+      }
+    }
+  }
+  function activeAt(t) {
+    let lo = 0, hi = units.length - 1, best = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1;
+      if (units[m].t0 <= t) { best = m; lo = m + 1; } else hi = m - 1; }
+    return best;
+  }
+  function scrollToActive() {
+    const el = units[active].hls[0];
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.top < innerHeight * .2 || r.bottom > innerHeight * .72) {
+      progScroll = Date.now();
+      el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
+    }
+  }
+
+  // ---- follow suspension: manual scrolling detaches, chip re-attaches
+  const detach = () => { if (follow) { follow = false;
+    $("followChip").classList.add("show"); } };
+  addEventListener("wheel", detach, { passive: true });
+  addEventListener("touchmove", detach, { passive: true });
+  const chipHide = () => $("followChip").classList.remove("show");
+  $("followChip").onclick = () => { follow = true; chipHide();
+    if (active >= 0) scrollToActive(); };
+  setInterval(() => { if (follow) chipHide(); }, 800);
+
+  // ---- draggable, collapsible panel
+  const panel = $("panel");
+  if (store.panel) Object.assign(panel.style, store.panel, { transform: "none" });
+  if (store.collapsed) panel.classList.add("collapsed");
+  $("grip").addEventListener("pointerdown", e => {
+    e.preventDefault();
+    const r = panel.getBoundingClientRect(), dx = e.clientX - r.left,
+          dy = e.clientY - r.top;
+    const move = ev => {
+      const left = Math.max(4, Math.min(innerWidth - r.width - 4, ev.clientX - dx));
+      const top = Math.max(4, Math.min(innerHeight - r.height - 4, ev.clientY - dy));
+      Object.assign(panel.style, { left: left + "px", top: top + "px",
+        bottom: "auto", transform: "none" });
+    };
+    const up = () => { removeEventListener("pointermove", move);
+      removeEventListener("pointerup", up);
+      store.panel = { left: panel.style.left, top: panel.style.top,
+        bottom: "auto" }; save(); };
+    addEventListener("pointermove", move);
+    addEventListener("pointerup", up);
+  });
+  $("grip").addEventListener("dblclick", () => {
+    panel.classList.toggle("collapsed");
+    store.collapsed = panel.classList.contains("collapsed"); save();
+  });
+
+  // ---- context menu: Copy / Start from here
+  const ctx = $("ctx");
+  let ctxTarget = null;
+  addEventListener("contextmenu", e => {
+    const pageEl = e.target.closest(".page");
+    if (!pageEl) { ctx.style.display = "none"; return; }
+    e.preventDefault();
+    const pr = pageEl.getBoundingClientRect(), n = +pageEl.dataset.n,
+          p = DATA.pages[n];
+    ctxTarget = { page: n, x: (e.clientX - pr.left) / pr.width * p.w,
+                  y: (e.clientY - pr.top) / pr.height * p.h };
+    $("ctxCopy").disabled = !String(getSelection()).length;
+    ctx.style.display = "block";
+    ctx.style.left = Math.min(e.clientX, innerWidth - ctx.offsetWidth - 8) + "px";
+    ctx.style.top = Math.min(e.clientY, innerHeight - ctx.offsetHeight - 8) + "px";
+  });
+  addEventListener("pointerdown", e => {
+    if (!ctx.contains(e.target)) ctx.style.display = "none"; });
+  $("ctxCopy").onclick = () => { ctx.style.display = "none";
+    const sel = String(getSelection());
+    if (sel) navigator.clipboard ? navigator.clipboard.writeText(sel)
+                                 : document.execCommand("copy"); };
+  $("ctxStart").onclick = () => { ctx.style.display = "none";
+    const u = unitAtPoint(ctxTarget);
+    if (u >= 0) { seekUnit(u); audio.play(); } };
+  function unitAtPoint({ page, x, y }) {
+    let best = -1, bestScore = Infinity;
+    units.forEach((u, i) => u.rects.forEach(([pg, x0, y0, x1, y1]) => {
+      if (pg !== page) return;
+      if (x >= x0 && x <= x1 && y >= y0 && y <= y1) { best = i; bestScore = -1; }
+      if (bestScore >= 0) {
+        const dy = y < y0 ? y0 - y : y > y1 ? (y - y1) + 500 : 0;   // prefer next
+        const dx = x < x0 ? x0 - x : x > x1 ? x - x1 : 0;
+        const score = dy * 3 + dx;
+        if (score < bestScore) { bestScore = score; best = i; }
+      }
+    }));
+    return best;
+  }
+
+  // ---- keyboard
+  addEventListener("keydown", e => {
+    if (e.target.tagName === "INPUT") return;
+    const k = e.key;
+    if (k === " ") { e.preventDefault(); $("play").click(); }
+    else if (k === "ArrowLeft") { audio.currentTime -= 10; follow = true; }
+    else if (k === "ArrowRight") { audio.currentTime += 10; follow = true; }
+    else if (k === ",") $("prevSent").click();
+    else if (k === ".") $("nextSent").click();
+    else if (k === "[") $("prevSec").click();
+    else if (k === "]") $("nextSec").click();
+  });
+
+  // rescale lazy text layers on resize (positions are %, sizes are px)
+  let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => {
+    document.querySelectorAll(".page").forEach(pe => {
+      const p = DATA.pages[+pe.dataset.n], scale = pe.clientWidth / p.w;
+      const words = DATA.textLayer[+pe.dataset.n];
+      pe.querySelectorAll(".textlayer span").forEach((s, i) => {
+        s.style.fontSize = Math.max((words[i][3] - words[i][1]) * scale * .82, 4) + "px";
+      });
+    });
+  }, 150); });
+}
+
+function fmt(t) {
+  t = Math.max(0, Math.round(t));
+  const h = t / 3600 | 0, m = (t % 3600) / 60 | 0, s = t % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" +
+         String(s).padStart(2, "0");
+}
+</script>
+</body>
+</html>

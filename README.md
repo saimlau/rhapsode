@@ -8,10 +8,26 @@ on CUDA (falls back to CPU).
 
 ```bash
 ./paper2audio "paper.pdf"                 # writes paper.mp3 next to the PDF
+./paper2audio "paper.pdf" --play          # browser read-along view (see below)
 ./paper2audio "paper.pdf" -o out.mp3      # explicit output path
 ./paper2audio "paper.pdf" --text-only    # inspect what will be read
 ./paper2audio "paper.pdf" --voice af_heart --speed 1.1
 ```
+
+## Read-along view
+
+`--play` builds `<paper>.readalong/` next to the PDF (page images +
+narration + a self-contained `index.html`) and opens it in the browser;
+`--readalong` rebuilds it without opening. Fully offline, no server.
+
+- The sentence being spoken is highlighted and auto-scrolled into view;
+  scrolling manually pauses following ("Follow narration" re-engages it).
+- Floating panel (drag by the dotted grip, double-click it to collapse):
+  play/pause, sentence/section jumps, section-segmented timeline, speed,
+  volume.
+- Text is selectable like a real PDF; right-click gives **Copy** and
+  **Start from here**.
+- Keyboard: Space play/pause · ←/→ ±10 s · ,/. sentence · [/] section.
 
 What gets read: title, abstract, keywords, and body sections, in
 two-column reading order. What gets skipped: author list, affiliations,
