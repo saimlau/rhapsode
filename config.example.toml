@@ -1,0 +1,22 @@
+# paper2audio configuration.
+# Copy this file to config.toml (gitignored) and edit for your machine.
+# Precedence: command-line flags > config.toml > built-in defaults.
+
+[library]
+# Where the GUI stores imported PDFs and generated read-along bundles.
+path = "~/PaperAudio"
+
+[tts]
+# Kokoro voice id (https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md)
+voice = "af_heart"
+# Speech speed multiplier used at synthesis time (the viewer also has a
+# live playback-speed control that doesn't require re-synthesis).
+speed = 1.0
+
+[render]
+# Page image resolution for the read-along view, in DPI.
+dpi = 150
+
+[gui]
+# Port for `paper2audio --gui` (auto-probes upward if busy).
+port = 7717

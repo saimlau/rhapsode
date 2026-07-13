@@ -11,6 +11,7 @@ import re
 import fitz  # PyMuPDF
 
 STOP_HEADINGS = re.compile(r"^(references|bibliography|literature\s+cited)\b", re.I)
+BANNERS = re.compile(r"^(sciencedirect|available online|journal homepage|www\.)", re.I)
 CITATION_RE = re.compile(r"\s*\[[0-9,;\s–—-]+\]")
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(“\"])")
 CHAR_FIXES = {"‐": "-", "‑": "-", "‒": "-", "­": "-", "ﬁ": "fi", "ﬂ": "fl",
@@ -187,9 +188,10 @@ def _body_font_size(doc):
 
 
 def _block_mapped(block, page_no):
-    """MappedText (lines joined by '\\n') and dominant font size for a block."""
+    """(MappedText, dominant font size, bold char fraction, line count)."""
     size_weight = {}
     chars, metas = [], []
+    bold_chars = total_chars = 0
     for line in block["lines"]:
         if chars:
             chars.append("\n")
@@ -197,11 +199,15 @@ def _block_mapped(block, page_no):
         for span in line["spans"]:
             key = round(span["size"], 1)
             size_weight[key] = size_weight.get(key, 0) + len(span["chars"])
+            total_chars += len(span["chars"])
+            if span["flags"] & 16:  # bold bit
+                bold_chars += len(span["chars"])
             for ch in span["chars"]:
                 chars.append(ch["c"])
                 metas.append((page_no, tuple(ch["bbox"])))
     size = max(size_weight, key=size_weight.get) if size_weight else 0.0
-    return MappedText("".join(chars), metas), size
+    bold = bold_chars / total_chars if total_chars else 0.0
+    return MappedText("".join(chars), metas), size, bold, len(block["lines"])
 
 
 def _order_blocks(blocks, page_width):
@@ -233,10 +239,38 @@ def _is_author_list(text):
     return text.count("·") >= 2 and re.search(r"\d(?:,\d+)*\s*·", text)
 
 
-def _parse_authors(text):
-    text = re.sub(r"[‐‑‒­]", "-", text)
-    names = [re.sub(r"[\d,\s*]+$", "", n.strip()) for n in text.split("·")]
-    return ", ".join(n for n in names if n)
+def _name_fragment(text):
+    """Short wrapped continuation of an author line: 'Glenn Daehn'."""
+    words = text.split()
+    return (2 <= len(words) <= 6 and len(text) < 40
+            and all(w[0].isalpha() and w[0].isupper() for w in words))
+
+
+def _looks_like_names(text):
+    """Comma-separated author line: several 'First Last'-shaped parts."""
+    parts = [p.strip() for p in text.split(",")]
+    namish = sum(1 for p in parts
+                 if len(p.split()) >= 2
+                 and all(w[0].isupper() for w in p.split() if w[0].isalpha()))
+    return len(parts) >= 3 and namish >= 2
+
+
+def _parse_authors(mt):
+    """Author names from a MappedText author line. Superscript affiliation
+    markers (Springer's '1,2', Elsevier's 'a,b,c') are stripped by glyph
+    height — superscripts are visibly smaller than the name characters."""
+    heights = sorted(m[1][3] - m[1][1] for m in mt.meta if m)
+    if heights:
+        cutoff = 0.75 * heights[len(heights) // 2]
+        kept = [(c, m) for c, m in zip(mt.text, mt.meta)
+                if m is None or (m[1][3] - m[1][1]) >= cutoff]
+        text = "".join(c for c, _ in kept)
+    else:
+        text = mt.text
+    text = re.sub(r"[‐‑‒­]", "-", " ".join(text.split()))
+    sep = "·" if "·" in text else ","
+    names = [re.sub(r"[\d\s*,]+$", "", n).strip(" .") for n in text.split(sep)]
+    return ", ".join(n for n in names if len(n) > 1)
 
 
 def extract_segments(pdf_path):
@@ -249,6 +283,7 @@ def extract_segments(pdf_path):
     body_size = _body_font_size(doc)
     segments = []
     meta = {"title": None, "authors": None}
+    title_size = 0.0
 
     for page_no, page in enumerate(doc):
         height = page.rect.height
@@ -257,21 +292,34 @@ def extract_segments(pdf_path):
             _, y0, _, y1 = block["bbox"]
             if y1 < 0.07 * height or y0 > 0.92 * height:
                 continue  # running header / footer zone
-            mt, size = _block_mapped(block, page_no)
+            mt, size, bold, n_lines = _block_mapped(block, page_no)
             flat = " ".join(mt.text.split())
             if not flat:
                 continue
-            if size < body_size - 0.6:
+            if size < body_size - 1.1:
                 continue  # captions, affiliations, received/copyright lines
             if page_no == 0 and _is_author_list(flat):
-                meta["authors"] = _parse_authors(flat)
+                meta["authors"] = _parse_authors(mt)
                 continue
-            is_heading = size >= body_size + 0.8 and len(flat) < 120
+            is_heading = ((size >= body_size + 0.8
+                           or (bold >= 0.9 and n_lines <= 2))
+                          and len(flat) < 120)
             if is_heading and STOP_HEADINGS.match(flat):
                 return segments, True, meta
+            if is_heading and page_no == 0 and meta["title"] is not None:
+                if meta["authors"] is None and _looks_like_names(flat):
+                    meta["authors"] = _parse_authors(mt)  # Elsevier author line
+                    continue
+                if meta["authors"] and _name_fragment(flat):
+                    meta["authors"] += ", " + _parse_authors(mt)  # wrapped names
+                    continue
             if is_heading:
-                if page_no == 0 and meta["title"] is None:
+                if page_no == 0 and size > title_size and not BANNERS.match(flat):
                     meta["title"] = flat
+                    title_size = size
+                    # publisher banners ("ScienceDirect") sit above the real
+                    # title; drop any heading collected before it on page 0
+                    segments = [s for s in segments if s[0] != "heading"]
                 segments.append(("heading", mt))
             elif page_no == 0 and flat.startswith("Abstract"):
                 segments.append(("heading", MappedText.plain("Abstract.")))

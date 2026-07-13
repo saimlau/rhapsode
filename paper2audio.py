@@ -5,12 +5,12 @@ Extracts title, abstract, and body text in reading order (PyMuPDF),
 skips affiliations / page furniture / figure captions / References,
 strips citation brackets, and synthesizes speech locally with Kokoro
 (CUDA when available). `--play` builds and opens a browser read-along
-view with synced sentence highlighting. See docs/superpowers/specs/.
+view with synced sentence highlighting; `--gui` starts the library web
+app. See docs/superpowers/specs/.
 """
 
 import argparse
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +19,7 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
+from config import load_config, library_path
 from extraction import (MappedText, clean_mapped, clean_text,
                         extract_segments, merge_continuations, split_sentences)
 
@@ -26,11 +27,25 @@ SAMPLE_RATE = 24000
 HEADING_PAUSE_S = 0.7
 PARAGRAPH_PAUSE_S = 0.35
 SENTENCE_PAUSE_S = 0.08
-RENDER_DPI = 150
+
+_PIPELINE = None  # warm Kokoro model, reused across papers in one process
 
 
-def build_units(segments):
-    """Flatten segments into per-sentence synthesis units."""
+def prepare_units(pdf_path):
+    """Extract and clean a paper. Returns (units, meta, warnings).
+
+    Raises ValueError for PDFs with no usable text (scanned/image-only).
+    """
+    warnings = []
+    segments, found_references, meta = extract_segments(pdf_path)
+    segments = merge_continuations(segments)
+    while segments and segments[-1][0] == "heading":
+        segments.pop()  # orphan trailing heading (e.g. Declarations with small-font body)
+    if sum(len(mt) for _, mt in segments) < 500:
+        raise ValueError("almost no text extracted — is this a scanned/image-only PDF?")
+    if not found_references:
+        warnings.append("no References heading found; reading to the end of the PDF")
+
     units = []
     for kind, mt in segments:
         cleaned = clean_mapped(mt)
@@ -45,31 +60,50 @@ def build_units(segments):
                 last = j == len(sentences) - 1
                 units.append({"kind": "body", "mt": sentence,
                               "pause": PARAGRAPH_PAUSE_S if last else SENTENCE_PAUSE_S})
-    return units
+    return units, meta, warnings
+
+
+def make_tags(pdf_path, meta):
+    title = clean_text(meta["title"] or "") or pdf_path.stem
+    artist = (f"{meta['authors']} (audio by paper2audio)" if meta["authors"]
+              else "audio by paper2audio")
+    return {"title": title, "artist": artist}
 
 
 # ----------------------------------------------------------------- synthesis
 
-def synthesize(units, out_path, voice, speed, tags=None):
-    """Synthesize units to MP3, recording per-unit start/end times and
-    (when Kokoro provides them) per-word timestamps."""
+def get_pipeline():
+    """Load Kokoro once per process; queued papers reuse the warm model."""
+    global _PIPELINE
+    if _PIPELINE is None:
+        import torch
+        from kokoro import KPipeline
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cpu":
+            print("warning: CUDA not available, synthesizing on CPU (slower)")
+        _PIPELINE = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M",
+                              device=device)
+    return _PIPELINE
+
+
+def synthesize(units, out_path, voice, speed, tags=None, progress=None):
+    """Synthesize units to MP3/M4A, recording per-unit start/end times and
+    (when Kokoro provides them) per-word timestamps. progress(i, n, text)
+    is called per unit when given; otherwise progress prints to stdout."""
     import numpy as np
     import soundfile as sf
-    import torch
-    from kokoro import KPipeline
 
     if not shutil.which("ffmpeg"):
-        sys.exit("error: ffmpeg not found on PATH (needed for MP3 encoding)")
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device == "cpu":
-        print("warning: CUDA not available, synthesizing on CPU (slower)")
-    pipeline = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", device=device)
+        raise RuntimeError("ffmpeg not found on PATH (needed for audio encoding)")
+    pipeline = get_pipeline()
 
     parts, samples = [], 0
     for i, unit in enumerate(units, 1):
         text = unit["mt"].text
-        print(f"  [{i}/{len(units)}] {text[:60]}...", flush=True)
+        if progress:
+            progress(i, len(units), text)
+        else:
+            print(f"  [{i}/{len(units)}] {text[:60]}...", flush=True)
         unit["t0"] = samples / SAMPLE_RATE
         words = []
         for item in pipeline(text, voice=voice, speed=speed):
@@ -132,10 +166,10 @@ def build_manifest(pdf_path, units, meta, title, artist, duration):
             "textLayer": words_layer}
 
 
-def render_pages(pdf_path, out_dir):
+def render_pages(pdf_path, out_dir, dpi):
     doc = fitz.open(pdf_path)
     for page in doc:
-        pix = page.get_pixmap(dpi=RENDER_DPI)
+        pix = page.get_pixmap(dpi=dpi)
         pix.save(out_dir / f"page-{page.number:03d}.png")
     return len(doc)
 
@@ -152,64 +186,87 @@ def write_viewer(out_dir, manifest):
     (out_dir / "manifest.json").write_text(data, encoding="utf-8")
 
 
+def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None):
+    """Full pipeline: PDF -> readalong bundle in out_dir. Returns summary dict."""
+    units, meta, warnings = prepare_units(pdf_path)
+    tags = make_tags(pdf_path, meta)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "narration.mp3").unlink(missing_ok=True)  # pre-m4a leftover
+    duration = synthesize(units, out_dir / "narration.m4a", voice, speed,
+                          tags, progress)
+    render_pages(pdf_path, out_dir, dpi)
+    manifest = build_manifest(pdf_path, units, meta, tags["title"],
+                              tags["artist"], duration)
+    write_viewer(out_dir, manifest)
+    return {"title": tags["title"], "authors": meta["authors"],
+            "duration": duration, "units": len(units), "warnings": warnings}
+
+
 # ---------------------------------------------------------------------- main
 
 def main():
+    cfg = load_config()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("pdf", type=Path, help="input paper PDF")
+    parser.add_argument("pdf", type=Path, nargs="?", help="input paper PDF")
     parser.add_argument("-o", "--output", type=Path,
                         help="output MP3 (default: next to the PDF)")
-    parser.add_argument("--voice", default="af_heart", help="Kokoro voice id")
-    parser.add_argument("--speed", type=float, default=1.0, help="speech speed")
+    parser.add_argument("--voice", default=cfg["tts"]["voice"],
+                        help="Kokoro voice id")
+    parser.add_argument("--speed", type=float, default=cfg["tts"]["speed"],
+                        help="speech speed")
+    parser.add_argument("--dpi", type=int, default=cfg["render"]["dpi"],
+                        help="read-along page render DPI")
     parser.add_argument("--text-only", action="store_true",
                         help="print the cleaned text instead of synthesizing")
     parser.add_argument("--readalong", action="store_true",
                         help="(re)generate the <paper>.readalong/ browser view")
     parser.add_argument("--play", action="store_true",
                         help="open the read-along view, generating it if missing")
+    parser.add_argument("--gui", action="store_true",
+                        help="start the library web app")
+    parser.add_argument("--library", type=Path,
+                        default=library_path(cfg),
+                        help="library folder for --gui")
+    parser.add_argument("--port", type=int, default=cfg["gui"]["port"],
+                        help="port for --gui")
     args = parser.parse_args()
 
+    if args.gui:
+        import server
+        server.run(args.library, args.port, voice=args.voice,
+                   speed=args.speed, dpi=args.dpi, open_browser=True)
+        return
+
+    if args.pdf is None:
+        parser.error("a PDF is required (or use --gui)")
     if not args.pdf.is_file():
         sys.exit(f"error: no such file: {args.pdf}")
 
-    segments, found_references, meta = extract_segments(args.pdf)
-    segments = merge_continuations(segments)
-    while segments and segments[-1][0] == "heading":
-        segments.pop()  # orphan trailing heading (e.g. Declarations with small-font body)
-
-    total_chars = sum(len(mt) for _, mt in segments)
-    if total_chars < 500:
-        sys.exit("error: almost no text extracted — is this a scanned/image-only PDF?")
-    if not found_references:
-        print("warning: no References heading found; reading to the end of the PDF")
-
     if args.text_only:
+        segments, found_references, _ = extract_segments(args.pdf)
+        segments = merge_continuations(segments)
+        while segments and segments[-1][0] == "heading":
+            segments.pop()
+        if not found_references:
+            print("warning: no References heading found; reading to the end "
+                  "of the PDF", file=sys.stderr)
         for kind, mt in segments:
             text = clean_mapped(mt).text
             if text:
                 print(f"\n## {text}" if kind == "heading" else f"\n{text}")
         return
 
-    title = clean_text(meta["title"] or "") or args.pdf.stem
-    artist = (f"{meta['authors']} (audio by paper2audio)" if meta["authors"]
-              else "audio by paper2audio")
-    tags = {"title": title, "artist": artist}
-
-    units = build_units(segments)
-    words = sum(len(u["mt"].text.split()) for u in units)
-    print(f"{len(units)} units, ~{words} words (~{words / 170:.0f} min of audio)")
-
     if args.readalong or args.play:
         out_dir = args.pdf.with_suffix(".readalong")
         index = out_dir / "index.html"
         if args.readalong or not index.is_file():
-            out_dir.mkdir(exist_ok=True)
-            (out_dir / "narration.mp3").unlink(missing_ok=True)  # pre-m4a leftover
-            duration = synthesize(units, out_dir / "narration.m4a",
-                                  args.voice, args.speed, tags)
-            render_pages(args.pdf, out_dir)
-            manifest = build_manifest(args.pdf, units, meta, title, artist, duration)
-            write_viewer(out_dir, manifest)
+            try:
+                info = generate_readalong(args.pdf, out_dir, args.voice,
+                                          args.speed, args.dpi)
+            except ValueError as e:
+                sys.exit(f"error: {e}")
+            for w in info["warnings"]:
+                print(f"warning: {w}")
             print(f"read-along view: {out_dir}")
         if args.play:
             subprocess.Popen(["xdg-open", str(index)],
@@ -217,8 +274,17 @@ def main():
             print(f"opened {index}")
         return
 
+    try:
+        units, meta, warnings = prepare_units(args.pdf)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+    for w in warnings:
+        print(f"warning: {w}")
+    words = sum(len(u["mt"].text.split()) for u in units)
+    print(f"{len(units)} units, ~{words} words (~{words / 170:.0f} min of audio)")
     out_path = args.output or args.pdf.with_suffix(".mp3")
-    duration = synthesize(units, out_path, args.voice, args.speed, tags)
+    duration = synthesize(units, out_path, args.voice, args.speed,
+                          make_tags(args.pdf, meta))
     print(f"done: {out_path}  ({duration / 60:.1f} min)")
 
 
