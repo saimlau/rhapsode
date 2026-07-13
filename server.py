@@ -106,6 +106,7 @@ class Worker(threading.Thread):
                     self.voice, self.speed, self.dpi, progress)
                 self.lib.update(pid, status="ready", progress=1.0,
                                 title=info["title"], authors=info["authors"],
+                                year=info["year"],
                                 duration=round(info["duration"], 1),
                                 warnings=info["warnings"])
             except Exception as e:  # keep the queue alive on any failure
@@ -148,13 +149,15 @@ def create_app(lib, worker):
 
         entry = {"id": pid, "hash": digest, "filename": file.filename,
                  "title": Path(file.filename or pid).stem, "authors": None,
-                 "status": "pending", "progress": 0.0, "error": None,
-                 "duration": None, "resume_t": 0.0, "added": time.time()}
+                 "year": None, "status": "pending", "progress": 0.0,
+                 "error": None, "duration": None, "resume_t": 0.0,
+                 "added": time.time()}
         try:  # fast CPU pass: real title/authors on the card immediately
             _, _, meta = extract_segments(paper_dir / "paper.pdf")
             if meta["title"]:
                 entry["title"] = clean_text(meta["title"])
             entry["authors"] = meta["authors"]
+            entry["year"] = meta["year"]
         except Exception as e:
             entry.update(status="error", error=f"extraction failed: {e}")
         with lib.lock:
@@ -260,6 +263,13 @@ def run(root, port, voice, speed, dpi, open_browser=False):
             if entry["status"] in ("generating", "pending"):
                 entry["status"] = "pending"
                 worker.enqueue(pid)
+            if entry.get("year") is None:  # migration: entries predating year
+                try:
+                    import fitz
+                    from extraction import _page_year
+                    entry["year"] = _page_year(fitz.open(lib.pdf_path(pid))[0])
+                except Exception:
+                    pass
         lib.save()
     worker.start()
 

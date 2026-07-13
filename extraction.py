@@ -273,16 +273,29 @@ def _parse_authors(mt):
     return ", ".join(n for n in names if len(n) > 1)
 
 
+def _page_year(page):
+    """Publication year: the most frequent plausible year on the page
+    (copyright, received/accepted, and issue lines all repeat it)."""
+    years = re.findall(r"\b(19[5-9]\d|20[0-3]\d)\b", page.get_text())
+    if not years:
+        return None
+    counts = {}
+    for y in years:
+        counts[y] = counts.get(y, 0) + 1
+    return int(max(counts, key=lambda y: (counts[y], y)))
+
+
 def extract_segments(pdf_path):
     """Return (segments, found_references, meta).
 
     segments: list of (kind, MappedText) in reading order, kind in
-    {'heading', 'body'}; meta: {'title', 'authors'}.
+    {'heading', 'body'}; meta: {'title', 'authors', 'year'}.
     """
     doc = fitz.open(pdf_path)
     body_size = _body_font_size(doc)
     segments = []
-    meta = {"title": None, "authors": None}
+    meta = {"title": None, "authors": None,
+            "year": _page_year(doc[0]) if len(doc) else None}
     title_size = 0.0
 
     for page_no, page in enumerate(doc):

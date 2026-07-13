@@ -199,7 +199,8 @@ def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None):
                               tags["artist"], duration)
     write_viewer(out_dir, manifest)
     return {"title": tags["title"], "authors": meta["authors"],
-            "duration": duration, "units": len(units), "warnings": warnings}
+            "year": meta["year"], "duration": duration,
+            "units": len(units), "warnings": warnings}
 
 
 # ---------------------------------------------------------------------- main
