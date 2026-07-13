@@ -82,3 +82,11 @@ Requires `ffmpeg` and `espeak-ng` on the system. First run downloads the
   work — always spot-check a new layout with `--text-only` first.
 - Scanned/image-only PDFs are rejected (no OCR).
 - Design spec: `docs/superpowers/specs/2026-07-12-paper2audio-design.md`.
+
+## Kokoro as a system voice (Speech Dispatcher)
+
+`speechd/install-speechd-voice.sh` registers Kokoro as a user-level
+Speech Dispatcher voice (no root): it appears in Zotero's built-in
+read-aloud voice list and any other speechd-aware app. Requires the
+paper2audio server to be running; test with
+`spd-say -o kokoro 'Hello from Kokoro'`.

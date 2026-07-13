@@ -16,9 +16,9 @@ import time
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               StreamingResponse)
+                               Response, StreamingResponse)
 
 import paper2audio as p2a
 from extraction import clean_text, extract_segments
@@ -237,6 +237,41 @@ def create_app(lib, worker):
                     yield f"data: {json.dumps(lib.snapshot())}\n\n"
                 time.sleep(0.7)
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    def _tts(text, rate, voice):
+        """Speak arbitrary text with the warm Kokoro model → WAV bytes.
+        Used by the Speech Dispatcher generic module (Zotero read-aloud)."""
+        import io
+        import numpy as np
+        import soundfile as sf
+        text = (text or "").strip()
+        if not text:
+            raise HTTPException(400, "empty text")
+        speed = min(max(float(rate or 1.0), 0.5), 2.0)
+        pipeline = p2a.get_pipeline()
+        parts = []
+        with p2a.TTS_LOCK:
+            for item in pipeline(text[:5000], voice=voice or worker.voice,
+                                 speed=speed):
+                audio = getattr(item, "audio", None)
+                if audio is None:
+                    _, _, audio = item
+                parts.append(audio.detach().cpu().numpy())
+        if not parts:
+            raise HTTPException(500, "synthesis produced no audio")
+        buf = io.BytesIO()
+        sf.write(buf, np.concatenate(parts), p2a.SAMPLE_RATE,
+                 format="WAV", subtype="PCM_16")
+        return Response(content=buf.getvalue(), media_type="audio/wav")
+
+    @app.post("/tts")
+    def tts_post(text: str = Form(...), rate: float = Form(1.0),
+                 voice: str = Form(None)):
+        return _tts(text, rate, voice)
+
+    @app.get("/tts")
+    def tts_get(text: str, rate: float = 1.0, voice: str = None):
+        return _tts(text, rate, voice)
 
     @app.get("/view/{pid}/{path:path}")
     def view(pid: str, path: str = ""):

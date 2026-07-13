@@ -1,0 +1,14 @@
+# Speech Dispatcher generic output module for Kokoro (via paper2audio).
+# Installed by install-speechd-voice.sh (which substitutes @REPO@).
+
+GenericExecuteSynth "printf '%s' '$DATA' | \"@REPO@/speechd/kokoro-say.sh\" $RATE $VOICE"
+
+GenericCmdDependency "curl"
+GenericCmdDependency "aplay"
+
+GenericLanguage "en" "en" "utf-8"
+
+AddVoice "en" "FEMALE1" "af_heart"
+AddVoice "en" "FEMALE2" "af_bella"
+AddVoice "en" "MALE1"   "am_michael"
+AddVoice "en" "MALE2"   "am_fenrir"

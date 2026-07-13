@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -29,6 +30,7 @@ PARAGRAPH_PAUSE_S = 0.35
 SENTENCE_PAUSE_S = 0.08
 
 _PIPELINE = None  # warm Kokoro model, reused across papers in one process
+TTS_LOCK = threading.Lock()  # one inference at a time (worker + /tts endpoint)
 
 
 def prepare_units(pdf_path):
@@ -106,7 +108,9 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None):
             print(f"  [{i}/{len(units)}] {text[:60]}...", flush=True)
         unit["t0"] = samples / SAMPLE_RATE
         words = []
-        for item in pipeline(text, voice=voice, speed=speed):
+        with TTS_LOCK:
+            results = list(pipeline(text, voice=voice, speed=speed))
+        for item in results:
             audio = getattr(item, "audio", None)
             if audio is None:
                 _, _, audio = item
