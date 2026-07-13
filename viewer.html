@@ -39,6 +39,7 @@ body { background: var(--desk); font-family: var(--sans); }
 .textlayer span {
   position: absolute; color: transparent; white-space: pre;
   transform-origin: 0 0; cursor: text; line-height: 1;
+  font-family: sans-serif;
 }
 .textlayer span::selection { background: rgba(90, 140, 255, .40); }
 
@@ -211,6 +212,7 @@ function init() {
     });
   });
 
+  const measure = document.createElement("canvas").getContext("2d");
   const buildTextLayer = pageEl => {
     const n = +pageEl.dataset.n, p = DATA.pages[n];
     const layer = pageEl.querySelector(".textlayer");
@@ -219,8 +221,15 @@ function init() {
     for (const [x0, y0, x1, y1, w] of DATA.textLayer[n]) {
       const s = document.createElement("span");
       s.textContent = w + " ";
+      // scaleX maps our font's glyph run onto the PDF word's exact width;
+      // the ratio is resize-invariant (both terms scale with the container)
+      const fsPt = (y1 - y0) * .82;
+      measure.font = `${fsPt}px sans-serif`;
+      const natural = measure.measureText(w).width;
+      const sx = natural > 0 ? Math.min(Math.max((x1 - x0) / natural, .3), 4) : 1;
       s.style.cssText = `left:${x0 / p.w * 100}%;top:${y0 / p.h * 100}%;` +
-        `font-size:${Math.max((y1 - y0) * scale * .82, 4)}px`;
+        `font-size:${Math.max(fsPt * scale, 4)}px;` +
+        `line-height:${(y1 - y0) * scale}px;transform:scaleX(${sx.toFixed(4)})`;
       frag.appendChild(s);
     }
     layer.appendChild(frag);
@@ -422,7 +431,9 @@ function init() {
       const p = DATA.pages[+pe.dataset.n], scale = pe.clientWidth / p.w;
       const words = DATA.textLayer[+pe.dataset.n];
       pe.querySelectorAll(".textlayer span").forEach((s, i) => {
-        s.style.fontSize = Math.max((words[i][3] - words[i][1]) * scale * .82, 4) + "px";
+        const h = (words[i][3] - words[i][1]) * scale;
+        s.style.fontSize = Math.max(h * .82, 4) + "px";
+        s.style.lineHeight = h + "px";
       });
     });
   }, 150); });
