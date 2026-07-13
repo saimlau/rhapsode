@@ -127,6 +127,7 @@ function openTab(win, url) {
   const { id, container } = win.Zotero_Tabs.add({
     type: "paper2audio",
     title: "paper2audio",
+    data: {},  // Zotero 9's tab bar reads tab.data.icon; must not be undefined
     select: true,
     onClose: () => tabByWindow.delete(win),
   });
