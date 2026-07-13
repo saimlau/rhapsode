@@ -458,6 +458,21 @@ function init() {
       () => { audio.currentTime = t; }, { once: true });
     if (params.get("autoplay") === "1")
       audio.play().catch(() => post({ type: "autoplay-blocked" }));
+    // forward file drags to the library page: drag events never cross the
+    // iframe boundary, so without this the drop overlay can't appear while
+    // the cursor is over the paper
+    addEventListener("dragover", e => {
+      if (e.dataTransfer?.types.includes("Files")) {
+        e.preventDefault();
+        post({ type: "drag" });
+      }
+    });
+    addEventListener("drop", e => {
+      if (e.dataTransfer?.types.includes("Files")) {
+        e.preventDefault();
+        post({ type: "drop", files: [...e.dataTransfer.files] });
+      }
+    });
   }
 
   // rescale lazy text layers on resize (positions are %, sizes are px)

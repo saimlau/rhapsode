@@ -191,7 +191,10 @@ function nextReady(afterId) {
 }
 addEventListener("message", e => {
   const m = e.data;
-  if (!m || m.source !== "paper2audio" || !currentId) return;
+  if (!m || m.source !== "paper2audio") return;
+  if (m.type === "drag") { dragPing(); return; }
+  if (m.type === "drop") { acceptFiles(m.files || []); return; }
+  if (!currentId) return;
   if (m.type === "position") {
     fetch(`/api/papers/${currentId}/position`, { method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -271,23 +274,32 @@ async function upload(files) {
 }
 $("drop").onclick = () => $("file").click();
 $("file").onchange = () => { upload([...$("file").files]); $("file").value = ""; };
-let dragDepth = 0;
-addEventListener("dragenter", e => {
-  if (e.dataTransfer?.types.includes("Files")) {
-    dragDepth++; $("overlay").classList.add("show");
+// Overlay driven by drag "pings" from this page AND the embedded viewer
+// (which forwards its drag events — they don't cross the iframe boundary).
+// A stale-ping timeout replaces enter/leave counting, which double-counts
+// when the overlay appears under the cursor.
+let lastDrag = 0;
+function dragPing() {
+  lastDrag = Date.now();
+  $("overlay").classList.add("show");
+}
+setInterval(() => {
+  if (lastDrag && Date.now() - lastDrag > 700) {
+    lastDrag = 0;
+    $("overlay").classList.remove("show");
   }
-});
-addEventListener("dragleave", () => {
-  if (--dragDepth <= 0) { dragDepth = 0; $("overlay").classList.remove("show"); }
-});
-addEventListener("dragover", e => e.preventDefault());
-addEventListener("drop", e => {
-  e.preventDefault();
-  dragDepth = 0; $("overlay").classList.remove("show");
-  const pdfs = [...e.dataTransfer.files].filter(f =>
-    f.name.toLowerCase().endsWith(".pdf"));
+}, 250);
+function acceptFiles(files) {
+  lastDrag = 0;
+  $("overlay").classList.remove("show");
+  const pdfs = [...files].filter(f => f.name.toLowerCase().endsWith(".pdf"));
   if (pdfs.length) upload(pdfs);
+}
+addEventListener("dragover", e => {
+  e.preventDefault();
+  if (e.dataTransfer?.types.includes("Files")) dragPing();
 });
+addEventListener("drop", e => { e.preventDefault(); acceptFiles(e.dataTransfer.files); });
 
 // ------------------------------------------------------------- live state
 function apply(snap) {
