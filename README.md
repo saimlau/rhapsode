@@ -9,10 +9,29 @@ on CUDA (falls back to CPU).
 ```bash
 ./paper2audio "paper.pdf"                 # writes paper.mp3 next to the PDF
 ./paper2audio "paper.pdf" --play          # browser read-along view (see below)
+./paper2audio --gui                       # library web app (see below)
 ./paper2audio "paper.pdf" -o out.mp3      # explicit output path
 ./paper2audio "paper.pdf" --text-only    # inspect what will be read
 ./paper2audio "paper.pdf" --voice af_heart --speed 1.1
 ```
+
+## Library GUI
+
+`--gui` starts a local web app (127.0.0.1 only) and opens the browser:
+drag-drop PDFs anywhere on the page to add them, watch generation
+progress live (one GPU worker, model kept warm between papers), and
+listen through the queue. Papers auto-advance podcast-style (toggleable);
+your position in each paper is remembered server-side. Drag cards to
+reorder; hover a card for regenerate/remove.
+
+The library (imported PDFs + generated bundles + `library.json`) lives at
+the path set in `config.toml`.
+
+## Configuration
+
+Copy `config.example.toml` to `config.toml` (gitignored) and edit:
+library path, default voice/speed, render DPI, GUI port. Precedence:
+CLI flags > config.toml > built-in defaults.
 
 ## Read-along view
 

@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>paper2audio library</title>
+<style>
+:root {
+  --desk: #ECEAE6;
+  --panel-bg: #201F1D;
+  --panel-ink: #EDEAE2;
+  --panel-muted: #8E8A80;
+  --marker: #F5B301;
+  --serif: "New York", "Iowan Old Style", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root { --desk: #1B1A18; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { display: flex; background: var(--desk); font-family: var(--sans); }
+
+#main { flex: 1; min-width: 0; position: relative; }
+#frame { width: 100%; height: 100%; border: 0; display: none; }
+#empty {
+  height: 100%; display: grid; place-items: center; color: var(--panel-muted);
+  text-align: center; font-size: 15px; line-height: 1.7; padding: 40px;
+}
+#empty .big { font: 22px var(--serif); color: #555149; }
+@media (prefers-color-scheme: dark) { #empty .big { color: #B5B0A6; } }
+
+/* ------------------------------------------------------------- sidebar */
+#side {
+  width: 320px; flex: none; background: var(--panel-bg); color: var(--panel-ink);
+  display: flex; flex-direction: column; box-shadow: -6px 0 24px rgba(0,0,0,.25);
+}
+#side header {
+  padding: 14px 16px 10px; display: flex; align-items: baseline; gap: 8px;
+}
+#side header h1 { font: 600 15px var(--sans); margin: 0; letter-spacing: .02em; }
+#side header .n { font: 11px var(--mono); color: var(--panel-muted); }
+#drop {
+  margin: 0 12px 10px; padding: 14px; border: 1.5px dashed #555149;
+  border-radius: 10px; text-align: center; color: var(--panel-muted);
+  font-size: 12.5px; cursor: pointer; transition: border-color .15s, color .15s;
+}
+#drop:hover, #drop.hot { border-color: var(--marker); color: var(--marker); }
+#queue { flex: 1; overflow-y: auto; padding: 2px 12px 12px; }
+.card {
+  background: rgba(255,255,255,.05); border-radius: 10px; padding: 10px 12px;
+  margin-bottom: 8px; cursor: pointer; border-left: 3px solid transparent;
+  position: relative;
+}
+.card:hover { background: rgba(255,255,255,.09); }
+.card.playing { border-left-color: var(--marker); }
+.card.dragging { opacity: .4; }
+.card .t { font: 13.5px/1.35 var(--serif); display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card .a { font-size: 11px; color: var(--panel-muted); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }
+.card .meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.card .dur { font: 10.5px var(--mono); color: var(--panel-muted); }
+.chip { font: 10px var(--sans); padding: 2px 7px; border-radius: 999px;
+  background: rgba(255,255,255,.12); }
+.chip.ready { background: rgba(90,180,90,.25); color: #A8E0A8; }
+.chip.error { background: rgba(220,80,80,.25); color: #F0A8A8; }
+.chip.generating, .chip.pending { background: rgba(245,179,1,.18); color: var(--marker); }
+.bar { flex: 1; height: 4px; border-radius: 2px; background: rgba(255,255,255,.12);
+  overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--marker); width: 0; }
+.card .err { font-size: 11px; color: #F0A8A8; margin-top: 5px; }
+.card .acts { position: absolute; top: 8px; right: 8px; display: none; gap: 2px; }
+.card:hover .acts { display: flex; }
+.acts button {
+  background: rgba(0,0,0,.35); border: 0; color: var(--panel-ink); width: 24px;
+  height: 24px; border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+.acts button:hover { background: rgba(0,0,0,.6); }
+#side footer {
+  padding: 10px 16px; border-top: 1px solid rgba(255,255,255,.08);
+  display: flex; align-items: center; gap: 8px; font-size: 12px;
+  color: var(--panel-muted);
+}
+#side footer label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+#autoadv { accent-color: var(--marker); }
+
+#overlay {
+  position: fixed; inset: 0; background: rgba(24,23,21,.75); display: none;
+  place-items: center; z-index: 50; color: var(--marker);
+  font: 600 20px var(--sans); border: 4px dashed var(--marker); border-radius: 18px;
+}
+#overlay.show { display: grid; }
+#toast {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+  background: #B33; color: #fff; padding: 9px 16px; border-radius: 9px;
+  font-size: 13px; display: none; z-index: 60;
+}
+:focus-visible { outline: 2px solid var(--marker); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div id="main">
+  <div id="empty"><div>
+    <div class="big">paper2audio</div><br>
+    Drop a PDF anywhere to add it to the library.<br>
+    Pick a paper from the queue to start listening.
+  </div></div>
+  <iframe id="frame" title="read-along view"></iframe>
+</div>
+
+<aside id="side">
+  <header><h1>paper2audio</h1><span class="n" id="count"></span></header>
+  <div id="drop">Drop PDFs here or click to browse</div>
+  <input id="file" type="file" accept="application/pdf" multiple hidden>
+  <div id="queue"></div>
+  <footer>
+    <label><input id="autoadv" type="checkbox"> Auto-advance</label>
+  </footer>
+</aside>
+
+<div id="overlay">Drop to add to library</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let state = { papers: {}, order: [], settings: {} };
+let currentId = null, dragId = null;
+
+// ------------------------------------------------------------- rendering
+function fmt(t) {
+  if (t == null) return "";
+  t = Math.round(t);
+  const m = t / 60 | 0, s = t % 60;
+  return m + ":" + String(s).padStart(2, "0");
+}
+function esc(s) { const d = document.createElement("div");
+  d.textContent = s ?? ""; return d.innerHTML; }
+
+function render() {
+  const q = $("queue");
+  const ready = state.order.filter(id => state.papers[id]?.status === "ready");
+  $("count").textContent = state.order.length ?
+    `${ready.length}/${state.order.length} ready` : "";
+  q.innerHTML = "";
+  for (const id of state.order) {
+    const p = state.papers[id];
+    if (!p) continue;
+    const card = document.createElement("div");
+    card.className = "card" + (id === currentId ? " playing" : "");
+    card.draggable = true;
+    card.dataset.id = id;
+    const pct = Math.round((p.progress || 0) * 100);
+    card.innerHTML = `
+      <div class="t">${esc(p.title)}</div>
+      <div class="a">${esc(p.authors || "")}</div>
+      <div class="meta">
+        ${p.status === "generating"
+          ? `<div class="bar"><i style="width:${pct}%"></i></div>
+             <span class="chip generating">${pct}%</span>`
+          : `<span class="dur">${fmt(p.duration)}</span>
+             <span class="chip ${p.status}">${p.status}</span>`}
+      </div>
+      ${p.status === "error" ? `<div class="err">${esc(p.error)}</div>` : ""}
+      <div class="acts">
+        <button data-act="regen" title="Regenerate">↻</button>
+        <button data-act="del" title="Remove from library">✕</button>
+      </div>`;
+    q.appendChild(card);
+  }
+  $("empty").style.display = currentId ? "none" : "grid";
+  $("frame").style.display = currentId ? "block" : "none";
+  $("autoadv").checked = !!state.settings.auto_advance;
+}
+
+// ------------------------------------------------------------- playback
+function play(id, autoplay) {
+  const p = state.papers[id];
+  if (!p || p.status !== "ready") return;
+  currentId = id;
+  const t = p.resume_t > 5 && p.resume_t < (p.duration || 1e9) - 10
+            ? p.resume_t : 0;
+  $("frame").src = `/view/${id}/index.html?embed=1&t=${t.toFixed(1)}` +
+                   (autoplay ? "&autoplay=1" : "");
+  render();
+}
+function nextReady(afterId) {
+  const ids = state.order.filter(id => state.papers[id]?.status === "ready");
+  const i = ids.indexOf(afterId);
+  return i >= 0 && i + 1 < ids.length ? ids[i + 1] : null;
+}
+addEventListener("message", e => {
+  const m = e.data;
+  if (!m || m.source !== "paper2audio" || !currentId) return;
+  if (m.type === "position") {
+    fetch(`/api/papers/${currentId}/position`, { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ t: m.t }) });
+    if (state.papers[currentId]) state.papers[currentId].resume_t = m.t;
+  } else if (m.type === "ended") {
+    fetch(`/api/papers/${currentId}/position`, { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ t: 0 }) });
+    const next = state.settings.auto_advance && nextReady(currentId);
+    if (next) play(next, true);
+  }
+});
+
+// ------------------------------------------------------------- queue UI
+$("queue").addEventListener("click", e => {
+  const card = e.target.closest(".card");
+  if (!card) return;
+  const id = card.dataset.id, act = e.target.dataset.act;
+  if (act === "del") {
+    if (confirm("Remove this paper (and its audio) from the library?"))
+      fetch(`/api/papers/${id}`, { method: "DELETE" })
+        .then(r => { if (!r.ok) r.json().then(j => toast(j.detail));
+                     if (id === currentId) { currentId = null; render(); } });
+  } else if (act === "regen") {
+    fetch(`/api/papers/${id}/regenerate`, { method: "POST" });
+  } else {
+    play(id, true);
+  }
+});
+$("queue").addEventListener("dragstart", e => {
+  const card = e.target.closest(".card");
+  if (card) { dragId = card.dataset.id; card.classList.add("dragging"); }
+});
+$("queue").addEventListener("dragover", e => {
+  e.preventDefault();
+  const over = e.target.closest(".card");
+  const drag = document.querySelector(".card.dragging");
+  if (!over || !drag || over === drag) return;
+  const r = over.getBoundingClientRect();
+  over.parentNode.insertBefore(drag,
+    e.clientY < r.top + r.height / 2 ? over : over.nextSibling);
+});
+$("queue").addEventListener("dragend", () => {
+  document.querySelector(".card.dragging")?.classList.remove("dragging");
+  const order = [...document.querySelectorAll(".card")].map(c => c.dataset.id);
+  if (order.join() !== state.order.join()) {
+    state.order = order;
+    fetch("/api/queue", { method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order }) });
+  }
+  dragId = null;
+});
+$("autoadv").addEventListener("change", () => {
+  state.settings.auto_advance = $("autoadv").checked;
+  fetch("/api/settings", { method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_advance: $("autoadv").checked }) });
+});
+
+// ------------------------------------------------------------- uploads
+function toast(msg) {
+  $("toast").textContent = msg;
+  $("toast").style.display = "block";
+  setTimeout(() => $("toast").style.display = "none", 5000);
+}
+async function upload(files) {
+  for (const f of files) {
+    const fd = new FormData();
+    fd.append("file", f, f.name);
+    try {
+      const r = await fetch("/api/papers", { method: "POST", body: fd });
+      if (!r.ok) toast((await r.json()).detail || `upload failed: ${f.name}`);
+    } catch { toast(`upload failed: ${f.name}`); }
+  }
+}
+$("drop").onclick = () => $("file").click();
+$("file").onchange = () => { upload([...$("file").files]); $("file").value = ""; };
+let dragDepth = 0;
+addEventListener("dragenter", e => {
+  if (e.dataTransfer?.types.includes("Files")) {
+    dragDepth++; $("overlay").classList.add("show");
+  }
+});
+addEventListener("dragleave", () => {
+  if (--dragDepth <= 0) { dragDepth = 0; $("overlay").classList.remove("show"); }
+});
+addEventListener("dragover", e => e.preventDefault());
+addEventListener("drop", e => {
+  e.preventDefault();
+  dragDepth = 0; $("overlay").classList.remove("show");
+  const pdfs = [...e.dataTransfer.files].filter(f =>
+    f.name.toLowerCase().endsWith(".pdf"));
+  if (pdfs.length) upload(pdfs);
+});
+
+// ------------------------------------------------------------- live state
+function apply(snap) {
+  state = snap;
+  if (dragId) return;          // don't fight an in-progress drag
+  render();
+}
+const es = new EventSource("/api/events");
+es.onmessage = e => apply(JSON.parse(e.data));
+fetch("/api/library").then(r => r.json()).then(snap => {
+  apply(snap);
+  const first = snap.order.find(id => snap.papers[id]?.status === "ready");
+  if (first) play(first, false);   // open most recent-in-order, paused
+});
+</script>
+</body>
+</html>

@@ -444,6 +444,22 @@ function init() {
     else if (k === "]") $("nextSec").click();
   });
 
+  // ---- library bridge: only active when embedded by the library app
+  const params = new URLSearchParams(location.search);
+  if (params.get("embed") === "1" && window.parent !== window) {
+    const post = msg => parent.postMessage({ source: "paper2audio", ...msg }, "*");
+    audio.addEventListener("ended", () => post({ type: "ended" }));
+    audio.addEventListener("pause", () =>
+      post({ type: "position", t: audio.currentTime }));
+    setInterval(() => { if (!audio.paused)
+      post({ type: "position", t: audio.currentTime }); }, 5000);
+    const t = parseFloat(params.get("t") || "0");
+    if (t > 1) audio.addEventListener("loadedmetadata",
+      () => { audio.currentTime = t; }, { once: true });
+    if (params.get("autoplay") === "1")
+      audio.play().catch(() => post({ type: "autoplay-blocked" }));
+  }
+
   // rescale lazy text layers on resize (positions are %, sizes are px)
   let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => {
     document.querySelectorAll(".page").forEach(pe => {
