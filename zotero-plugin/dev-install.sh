@@ -3,7 +3,9 @@
 # Run while Zotero is CLOSED; then start Zotero normally.
 set -euo pipefail
 
-if pgrep -f "zotero" > /dev/null 2>&1; then
+# match the executable name exactly (-x): a full-cmdline match (-f) would
+# match this script's own path, which contains "zotero"
+if pgrep -x zotero-bin > /dev/null 2>&1 || pgrep -x zotero > /dev/null 2>&1; then
   echo "Zotero appears to be running — quit it first, then re-run this."
   exit 1
 fi
