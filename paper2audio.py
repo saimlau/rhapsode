@@ -94,8 +94,12 @@ def synthesize(units, out_path, voice, speed, tags=None):
     wave = np.concatenate(parts)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
         sf.write(tmp.name, wave, SAMPLE_RATE, subtype="PCM_16")
-        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", tmp.name,
-               "-codec:a", "libmp3lame", "-q:a", "3"]
+        # m4a for the read-along view: MP4's sample table makes browser seeks
+        # sample-accurate, unlike (VBR) MP3 which drifts on every seek
+        codec = (["-codec:a", "aac", "-b:a", "96k", "-movflags", "+faststart"]
+                 if out_path.suffix in (".m4a", ".mp4")
+                 else ["-codec:a", "libmp3lame", "-q:a", "3"])
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", tmp.name] + codec
         for key, value in (tags or {}).items():
             if value:
                 cmd += ["-metadata", f"{key}={value}"]
@@ -123,7 +127,7 @@ def build_manifest(pdf_path, units, meta, title, artist, duration):
     sections = [{"title": u["text"], "t0": u["t0"]}
                 for u in manifest_units if u["kind"] == "heading"]
     return {"title": title, "artist": artist, "source": pdf_path.name,
-            "audio": "narration.mp3", "duration": round(duration, 3),
+            "audio": "narration.m4a", "duration": round(duration, 3),
             "pages": pages, "sections": sections, "units": manifest_units,
             "textLayer": words_layer}
 
@@ -200,7 +204,8 @@ def main():
         index = out_dir / "index.html"
         if args.readalong or not index.is_file():
             out_dir.mkdir(exist_ok=True)
-            duration = synthesize(units, out_dir / "narration.mp3",
+            (out_dir / "narration.mp3").unlink(missing_ok=True)  # pre-m4a leftover
+            duration = synthesize(units, out_dir / "narration.m4a",
                                   args.voice, args.speed, tags)
             render_pages(args.pdf, out_dir)
             manifest = build_manifest(args.pdf, units, meta, title, artist, duration)
