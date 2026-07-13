@@ -124,6 +124,12 @@ function openTab(win, url) {
   if (win.gBrowser && typeof win.gBrowser.getTabForBrowser !== "function") {
     win.gBrowser.getTabForBrowser = () => null;
   }
+  // Heal zombie tabs (data: undefined) left by earlier plugin versions:
+  // Zotero_Tabs._update() reads tab.data.icon for every tab and one bad
+  // entry breaks all tab operations until restart
+  for (const t of win.Zotero_Tabs._tabs) {
+    if (!t.data) t.data = {};
+  }
   const { id, container } = win.Zotero_Tabs.add({
     type: "paper2audio",
     title: "paper2audio",
