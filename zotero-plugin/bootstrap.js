@@ -119,12 +119,18 @@ function openTab(win, url) {
     win.Zotero_Tabs.select(existing.tabID);
     return;
   }
+  // Zotero's gBrowser shim lacks getTabForBrowser; Gecko's browser custom
+  // element calls it on pagehide and throws — give it a harmless no-op
+  if (win.gBrowser && typeof win.gBrowser.getTabForBrowser !== "function") {
+    win.gBrowser.getTabForBrowser = () => null;
+  }
   const { id, container } = win.Zotero_Tabs.add({
     type: "paper2audio",
     title: "paper2audio",
     select: true,
     onClose: () => tabByWindow.delete(win),
   });
+  log("tab created: " + id);
   const browser = win.document.createXULElement("browser");
   browser.setAttribute("type", "content");
   browser.setAttribute("remote", "true");
@@ -145,6 +151,15 @@ function uninstall() {}
 function startup({ rootURI: uri }) {
   rootURI = uri;
   log("startup, rootURI=" + rootURI);
+  // onMainWindowLoad only fires for windows opened after startup; when the
+  // plugin is installed into a running Zotero, inject into existing windows
+  for (const win of Zotero.getMainWindows()) {
+    try {
+      onMainWindowLoad({ window: win });
+    } catch (e) {
+      log("existing-window inject failed: " + e);
+    }
+  }
 }
 
 function onMainWindowLoad({ window: win }) {
