@@ -230,12 +230,15 @@ def main():
                         help="library folder for --gui")
     parser.add_argument("--port", type=int, default=cfg["gui"]["port"],
                         help="port for --gui")
+    parser.add_argument("--no-open", action="store_true",
+                        help="with --gui: don't open a browser")
     args = parser.parse_args()
 
     if args.gui:
         import server
         server.run(args.library, args.port, voice=args.voice,
-                   speed=args.speed, dpi=args.dpi, open_browser=True)
+                   speed=args.speed, dpi=args.dpi,
+                   open_browser=not args.no_open)
         return
 
     if args.pdf is None:

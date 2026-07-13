@@ -333,8 +333,14 @@ addEventListener("dragover", e => {
 addEventListener("drop", e => { e.preventDefault(); acceptFiles(e.dataTransfer.files); });
 
 // ------------------------------------------------------------- live state
+let pendingPlay = new URLSearchParams(location.search).get("play");
 function apply(snap) {
   state = snap;
+  if (pendingPlay && state.papers[pendingPlay]?.status === "ready") {
+    const id = pendingPlay;      // deep link (?play=): start once ready
+    pendingPlay = null;
+    play(id, true);
+  }
   if (dragId) return;          // don't fight an in-progress drag
   render();
 }
@@ -342,6 +348,7 @@ const es = new EventSource("/api/events");
 es.onmessage = e => apply(JSON.parse(e.data));
 fetch("/api/library").then(r => r.json()).then(snap => {
   apply(snap);
+  if (currentId || pendingPlay) return;
   const first = snap.order.find(id => snap.papers[id]?.status === "ready");
   if (first) play(first, false);   // open first ready paper, paused
 });

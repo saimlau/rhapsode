@@ -27,6 +27,14 @@ reorder; hover a card for regenerate/remove.
 The library (imported PDFs + generated bundles + `library.json`) lives at
 the path set in `config.toml`.
 
+## Zotero plugin
+
+`zotero-plugin/` adds "Listen with paper2audio" to Zotero's item context
+menu: the selected item's PDF goes to the local server and the read-along
+opens inside a Zotero tab (the server is auto-started if needed). Install
+for development with `zotero-plugin/dev-install.sh` while Zotero is
+closed, then restart Zotero. Requires Zotero 7/8.
+
 ## Configuration
 
 Copy `config.example.toml` to `config.toml` (gitignored) and edit:

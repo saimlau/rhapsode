@@ -128,27 +128,25 @@ def create_app(lib, worker):
     def get_library():
         return lib.snapshot()
 
-    @app.post("/api/papers")
-    def add_paper(file: UploadFile):
-        data = file.file.read(MAX_UPLOAD + 1)
+    def _ingest(filename, data):
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "file exceeds 100 MB")
         if not data.startswith(b"%PDF"):
-            raise HTTPException(400, f"{file.filename}: not a PDF")
+            raise HTTPException(400, f"{filename}: not a PDF")
         digest = hashlib.sha1(data).hexdigest()[:10]
         with lib.lock:
             for pid, entry in lib.data["papers"].items():
                 if entry.get("hash") == digest:
                     return JSONResponse({"id": pid, "duplicate": True})
         slug = re.sub(r"[^A-Za-z0-9._-]+", "-",
-                      Path(file.filename or "paper").stem)[:40].strip("-.")
+                      Path(filename or "paper").stem)[:40].strip("-.")
         pid = f"{slug or 'paper'}-{digest}"
         paper_dir = lib.root / pid
         paper_dir.mkdir(parents=True, exist_ok=True)
         (paper_dir / "paper.pdf").write_bytes(data)
 
-        entry = {"id": pid, "hash": digest, "filename": file.filename,
-                 "title": Path(file.filename or pid).stem, "authors": None,
+        entry = {"id": pid, "hash": digest, "filename": filename,
+                 "title": Path(filename or pid).stem, "authors": None,
                  "year": None, "status": "pending", "progress": 0.0,
                  "error": None, "duration": None, "resume_t": 0.0,
                  "added": time.time()}
@@ -167,6 +165,19 @@ def create_app(lib, worker):
         if entry["status"] == "pending":
             worker.enqueue(pid)
         return JSONResponse({"id": pid, "duplicate": False})
+
+    @app.post("/api/papers")
+    def add_paper(file: UploadFile):
+        return _ingest(file.filename, file.file.read(MAX_UPLOAD + 1))
+
+    @app.post("/api/papers/by-path")
+    def add_by_path(body: dict):
+        """Ingest a local PDF by absolute path (used by the Zotero plugin;
+        the server is localhost-only, so the caller is on this machine)."""
+        src = Path(str(body.get("path", ""))).expanduser()
+        if not src.is_file():
+            raise HTTPException(404, f"no such file: {src}")
+        return _ingest(src.name, src.read_bytes())
 
     @app.delete("/api/papers/{pid}")
     def delete_paper(pid: str):
