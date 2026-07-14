@@ -103,24 +103,47 @@ async function bestPdf(item) {
   return att && att.attachmentContentType === "application/pdf" ? att : null;
 }
 
+function collectionPath(col) {
+  // full ancestry, so a right-click on a nested subcollection resolves to
+  // the same "Grandparent / Parent / Child" playlist as a top-level send
+  const segs = [];
+  for (let c = col; c; c = c.parentID ? Zotero.Collections.get(c.parentID)
+                                      : null) {
+    segs.unshift(c.name);
+  }
+  return segs;
+}
+
+async function ensurePlaylist(name) {
+  await Zotero.HTTP.request("POST", base() + "/api/playlists", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+    timeout: 30000,
+  });
+}
+
 async function listenCollection(win) {
   const col = win.ZoteroPane.getSelectedCollection();
   if (!col) throw new Error("No collection selected");
   await ensureServer();
-  let sent = 0;
   const walk = async (c, path) => {
     const playlist = path.join(" / ");
+    let n = 0;
     for (const item of c.getChildItems()) {
       const att = await bestPdf(item);
-      if (att && await sendItem(item, att, playlist)) sent++;
+      if (att && await sendItem(item, att, playlist)) n++;
     }
     for (const sub of c.getChildCollections()) {
-      await walk(sub, path.concat(sub.name));  // subcollections become
-    }                                          // "Parent / Child" playlists
+      n += await walk(sub, path.concat(sub.name));  // subcollections become
+    }                                               // "Parent / Child" playlists
+    if (n) await ensurePlaylist(playlist);  // parents exist even when all
+    return n;                               // their papers are in children
   };
-  await walk(col, [col.name]);
+  const rootPath = collectionPath(col);
+  const sent = await walk(col, rootPath);
   if (!sent) throw new Error("No PDF attachments found in this collection");
-  openTab(win, base() + "/?playlist=" + encodeURIComponent(col.name));
+  openTab(win, base() + "/?playlist="
+               + encodeURIComponent(rootPath.join(" / ")));
 }
 
 async function listen(win) {

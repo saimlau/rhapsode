@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "paper2audio for Zotero",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Listen to papers with synced read-along highlighting, narrated locally by Kokoro TTS",
   "author": "saimai",
   "applications": {
