@@ -426,10 +426,26 @@ function addToPlaylistMenu(ids, x, y) {
   }});
   showMenu(items, x, y);
 }
+let lastSort = null;  // {key, dir} — picking the same sort again reverses it
 function sortMenu(x, y) {
-  const apply = cmp => {
-    const ids = [...visibleIds()].sort(
-      (a, b) => cmp(state.papers[a], state.papers[b]));
+  const KEYS = [
+    ["title", "title", "str"],
+    ["first author", "authors", "str"],
+    ["year", "year", "num"],
+    ["duration", "duration", "num"],
+    ["recently added", "added", "num"],
+  ];
+  const apply = (key, type) => {
+    // strings default A→Z; numbers default descending (newest/longest first);
+    // repeat selection flips the direction
+    const dir = lastSort?.key === key ? -lastSort.dir
+                                      : (type === "num" ? -1 : 1);
+    lastSort = { key, dir };
+    const val = id => state.papers[id]?.[key];
+    const cmp = type === "str"
+      ? (a, b) => dir * String(val(a) ?? "").localeCompare(String(val(b) ?? ""))
+      : (a, b) => dir * ((val(a) ?? 0) - (val(b) ?? 0));
+    const ids = [...visibleIds()].sort(cmp);
     if (activePl && playlists()[activePl]) {
       playlists()[activePl].order = ids;
       fetch(`/api/playlists/${activePl}`, { method: "PUT", ...jbody({ order: ids }) });
@@ -439,16 +455,13 @@ function sortMenu(x, y) {
     }
     render();
   };
-  const str = f => (a, b) =>
-    String(f(a) ?? "").localeCompare(String(f(b) ?? ""));
-  const desc = f => (a, b) => (f(b) ?? 0) - (f(a) ?? 0);
-  showMenu([
-    { label: "Sort by title", action: () => apply(str(p => p.title)) },
-    { label: "Sort by first author", action: () => apply(str(p => p.authors)) },
-    { label: "Sort by year (newest)", action: () => apply(desc(p => p.year)) },
-    { label: "Sort by duration", action: () => apply(desc(p => p.duration)) },
-    { label: "Sort by recently added", action: () => apply(desc(p => p.added)) },
-  ], x, y);
+  showMenu(KEYS.map(([label, key, type]) => ({
+    label: "Sort by " + label + (lastSort?.key === key
+      ? (lastSort.dir === 1 ? "  ↑ (pick again to flip)"
+                            : "  ↓ (pick again to flip)")
+      : ""),
+    action: () => apply(key, type),
+  })), x, y);
 }
 $("queue").addEventListener("dragstart", e => {
   const row = e.target.closest(".row");
