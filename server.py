@@ -105,9 +105,8 @@ class Worker(threading.Thread):
                 self.lib.save()
             last = [0.0]
 
-            def progress(i, n, _text):
-                frac = i / n
-                if frac - last[0] >= 0.02 or i == n:
+            def progress(frac, _label):
+                if frac - last[0] >= 0.02 or frac >= 1.0:
                     last[0] = frac
                     self.lib.update(pid, progress=round(frac, 3))
 

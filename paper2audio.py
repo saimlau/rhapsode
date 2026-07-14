@@ -160,6 +160,8 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None):
         parts.append(silence)
         samples += len(silence)
 
+    if progress:
+        progress(len(units), len(units), "encoding audio")
     wave = np.concatenate(parts)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
         sf.write(tmp.name, wave, SAMPLE_RATE, subtype="PCM_16")
@@ -223,17 +225,29 @@ def write_viewer(out_dir, manifest):
 
 def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
                        grobid_cfg=None):
-    """Full pipeline: PDF -> readalong bundle in out_dir. Returns summary dict."""
+    """Full pipeline: PDF -> readalong bundle in out_dir. Returns summary
+    dict. progress(fraction, label) covers the whole pipeline: synthesis
+    maps to 0-0.87, then encode/pages/manifest — so the bar doesn't sit at
+    a false 100% during the post-synthesis stages."""
+    def unit_cb(i, n, text):
+        progress(0.87 * i / n, text)
+
     units, meta, warnings = prepare_units(pdf_path, grobid_cfg)
     tags = make_tags(pdf_path, meta)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "narration.mp3").unlink(missing_ok=True)  # pre-m4a leftover
     duration = synthesize(units, out_dir / "narration.m4a", voice, speed,
-                          tags, progress)
+                          tags, unit_cb if progress else None)
+    if progress:
+        progress(0.92, "rendering pages")
     render_pages(pdf_path, out_dir, dpi)
+    if progress:
+        progress(0.97, "building manifest")
     manifest = build_manifest(pdf_path, units, meta, tags["title"],
                               tags["artist"], duration)
     write_viewer(out_dir, manifest)
+    if progress:
+        progress(1.0, "done")
     return {"title": tags["title"], "authors": meta["authors"],
             "year": meta["year"], "duration": duration,
             "units": len(units), "warnings": warnings}
