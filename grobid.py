@@ -159,10 +159,13 @@ def extract(pdf_path, url, timeout=180):
                       "para_end": False})
     abstract = root.find(f".//{TEI}profileDesc/{TEI}abstract")
     if abstract is not None:
-        units.append({"kind": "heading", "text": "Abstract.",
-                      "rects": [], "para_end": False})
+        ab_units = []
         for div in abstract.findall(f".//{TEI}div") or [abstract]:
-            _sentences(div, units)
+            _sentences(div, ab_units)
+        if ab_units:  # the TEI <abstract> element exists even when empty
+            units.append({"kind": "heading", "text": "Abstract.",
+                          "rects": [], "para_end": False})
+            units.extend(ab_units)
 
     body = root.find(f".//{TEI}text/{TEI}body")
     if body is not None:

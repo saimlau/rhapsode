@@ -538,8 +538,10 @@ def extract_segments(pdf_path, max_pages=None):
                 segments.append(("heading", mt))
             elif page_no == 0 and flat.startswith("Abstract"):
                 saw_content = True
-                segments.append(("heading", MappedText.plain("Abstract.")))
-                segments.append(("body", mt.sub(r"^\s*Abstract\s*[:.—–-]*\s*", "")))
+                rest = mt.sub(r"^\s*Abstract\s*[:.—–-]*\s*", "").strip()
+                if rest.text:  # a bare "Abstract" label announces nothing
+                    segments.append(("heading", MappedText.plain("Abstract.")))
+                    segments.append(("body", rest))
             elif page_no == 0 and flat.startswith("Keywords"):
                 kw = mt.sub(r"^\s*Keywords?\s*[:.—–-]*\s*", "Keywords: ")
                 kw = kw.sub(r"\s*[·;]\s*", ", ") + MappedText.plain(".")
