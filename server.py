@@ -232,11 +232,20 @@ def create_app(lib, worker):
     @app.get("/api/events")
     def events():
         def gen():
-            last = 0
+            last, idle = 0, 0
             while True:
                 if lib.version != last:
                     last = lib.version
+                    idle = 0
                     yield f"data: {json.dumps(lib.snapshot())}\n\n"
+                elif idle >= 20:
+                    idle = 0
+                    # heartbeat: without periodic yields a dead client's
+                    # generator is never closed and its thread leaks —
+                    # enough reloads exhaust the pool and wedge the server
+                    yield ": ping\n\n"
+                else:
+                    idle += 1
                 time.sleep(0.7)
         return StreamingResponse(gen(), media_type="text/event-stream")
 
