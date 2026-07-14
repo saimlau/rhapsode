@@ -171,8 +171,9 @@ def extract(pdf_path, url, timeout=180):
             if head is not None and _text(head):
                 n = head.get("n", "")
                 text = (f"{n} {_text(head)}".strip() if n else _text(head))
-                # figure-reference fragments occasionally parse as heads
-                if re.search(r"[A-Za-z]{3}", text):
+                # figure labels / reference fragments occasionally parse as heads
+                if (re.search(r"[A-Za-z]{3}", text)
+                        and not re.match(r"(?i)^(figure|fig\b|table)", text)):
                     units.append({"kind": "heading", "text": text,
                                   "rects": _coords_to_rects(head.get("coords")),
                                   "para_end": False})
@@ -180,8 +181,69 @@ def extract(pdf_path, url, timeout=180):
 
     if sum(len(u["text"]) for u in units) < 500:
         raise ValueError("GROBID returned almost no text")
+    recovered = _recover_missing_headings(pdf_path, units)
+    if recovered:
+        warnings.append(f"recovered {recovered} section heading(s) GROBID "
+                        f"missed")
     covered = sum(1 for u in units if u["rects"])
     if covered < 0.8 * len(units):
         warnings.append(f"GROBID coordinates missing for "
                         f"{len(units) - covered}/{len(units)} units")
     return units, meta, warnings
+
+
+HEADING_LINE = re.compile(
+    r"(?:[IVX]{1,4}|[A-Z]|\d{1,2})[.)]\s+[A-Z][A-Z\d\s&,'’:-]{3,}")
+
+
+def _recover_missing_headings(pdf_path, units):
+    """GROBID sometimes drops run-in section headings entirely (they appear
+    neither as <head> nor in any <p>). Recover heading-shaped ALL-CAPS lines
+    from the PDF and insert them at their coordinate position."""
+    import fitz
+    doc = fitz.open(pdf_path)
+    mids = [p.rect.width / 2 for p in doc]
+
+    def key(page, x0, y0):
+        return (page, 0 if x0 < mids[page] else 1, y0)
+
+    have = {re.sub(r"[^a-z0-9]", "", u["text"].lower())
+            for u in units if u["kind"] == "heading"}
+    found = []
+    for page in doc:
+        for block in page.get_text("dict")["blocks"]:
+            if block["type"] != 0:
+                continue
+            for line in block["lines"]:
+                text = " ".join("".join(
+                    s["text"] for s in line["spans"]).split())
+                letters = [c for c in text if c.isalpha()]
+                if not (6 <= len(text) <= 90) or not letters:
+                    continue
+                if sum(c.isupper() for c in letters) / len(letters) < 0.85:
+                    continue
+                for m in HEADING_LINE.finditer(text):
+                    cand = m.group().strip(" .,:-")
+                    norm = re.sub(r"[^a-z0-9]", "", cand.lower())
+                    if (len(norm) < 6
+                            or re.match(r"(?i)^(figure|fig|table)\b", cand)
+                            or any(norm in h or h in norm for h in have)):
+                        continue
+                    b = line["bbox"]
+                    found.append({"kind": "heading", "text": cand,
+                                  "rects": [[page.number, round(b[0], 2),
+                                             round(b[1], 2), round(b[2], 2),
+                                             round(b[3], 2)]],
+                                  "para_end": False})
+                    have.add(norm)
+    for h in found:
+        r = h["rects"][0]
+        hkey = key(r[0], r[1], r[2])
+        idx = len(units)
+        for i, u in enumerate(units):
+            ur = u["rects"][0] if u["rects"] else None
+            if ur and key(ur[0], ur[1], ur[2]) > hkey:
+                idx = i
+                break
+        units.insert(idx, h)
+    return len(found)
