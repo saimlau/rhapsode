@@ -39,13 +39,15 @@ def ensure(url, home=None, autostart=True, wait_s=150):
                    "/bin/grobid-service")
     if dist.is_file():
         cmd = [str(dist), "server",
-               str(home / "grobid-service/config/config.yaml")]
+               str(home / "grobid-home/config/grobid.yaml")]
     elif (home / "gradlew").is_file():
         cmd = ["./gradlew", "run", "--quiet"]
     else:
         print(f"warning: no GROBID install at {home}")
         return False
-    env = dict(os.environ, GROBID_HOME=str(home / "grobid-home"))
+    env = dict(os.environ, GROBID_HOME=str(home / "grobid-home"),
+               JAVA_OPTS="-Xmx2g")  # CRF models run fine in 2 GB; an
+                                    # uncapped JVM balloons over time
     if (home / "jdk/bin/java").is_file():
         env["JAVA_HOME"] = str(home / "jdk")  # bundled JDK 17 (GROBID
         env["PATH"] = f"{home}/jdk/bin:{env.get('PATH', '')}"  # needs <=17)
