@@ -115,11 +115,15 @@ class Worker(threading.Thread):
                     self.lib.pdf_path(pid), self.lib.view_dir(pid),
                     self.voice, self.speed, self.dpi, progress,
                     grobid_cfg=self.grobid_cfg)
-                self.lib.update(pid, status="ready", progress=1.0,
-                                title=info["title"], authors=info["authors"],
-                                year=info["year"],
-                                duration=round(info["duration"], 1),
-                                warnings=info["warnings"])
+                fields = dict(status="ready", progress=1.0,
+                              duration=round(info["duration"], 1),
+                              warnings=info["warnings"])
+                with self.lib.lock:
+                    locked = self.lib.data["papers"][pid].get("meta_locked")
+                if not locked:  # Zotero-sourced metadata is authoritative
+                    fields.update(title=info["title"], authors=info["authors"],
+                                  year=info["year"])
+                self.lib.update(pid, **fields)
             except Exception as e:  # keep the queue alive on any failure
                 self.lib.update(pid, status="error", error=str(e))
 
@@ -192,9 +196,20 @@ def create_app(lib, worker):
         if not src.is_file():
             raise HTTPException(404, f"no such file: {src}")
         resp = _ingest(src.name, src.read_bytes())
+        pid = json.loads(resp.body)["id"]
+
+        # Zotero's curated metadata is authoritative: apply it (also on
+        # duplicates, healing bad extracted titles) and lock it so the
+        # generation worker doesn't overwrite it later
+        fields = {k: body[k] for k in ("title", "authors") if body.get(k)}
+        if body.get("year"):
+            fields["year"] = int(body["year"])
+        if fields:
+            fields["meta_locked"] = True
+            lib.update(pid, **fields)
+
         name = str(body.get("playlist", "")).strip()
         if name:
-            pid = json.loads(resp.body)["id"]
             plid = lib.playlist_by_name(name)
             with lib.lock:
                 order = lib.data["playlists"][plid]["order"]

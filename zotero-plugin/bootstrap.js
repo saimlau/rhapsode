@@ -69,10 +69,25 @@ async function ensureServer() {
     + repo + "/paper2audio --gui --no-open)");
 }
 
-async function sendItem(att, playlist) {
+function itemMeta(item) {
+  // Zotero's curated metadata beats anything extracted from the PDF
+  const src = item.isAttachment() ? (item.parentItem || item) : item;
+  const authors = src.getCreators()
+    .map(c => (c.firstName ? c.firstName + " " : "") + (c.lastName || ""))
+    .map(s => s.trim()).filter(Boolean).join(", ");
+  const date = Zotero.Date.strToDate(src.getField("date"));
+  return {
+    title: src.getField("title") || null,
+    authors: authors || null,
+    year: date && date.year ? date.year : null,
+  };
+}
+
+async function sendItem(item, att, playlist) {
   const path = await att.getFilePathAsync();
   if (!path) return null;
-  const body = playlist ? { path, playlist } : { path };
+  const body = { path, ...itemMeta(item) };
+  if (playlist) body.playlist = playlist;
   const resp = await Zotero.HTTP.request("POST", base() + "/api/papers/by-path", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -97,7 +112,7 @@ async function listenCollection(win) {
     const playlist = path.join(" / ");
     for (const item of c.getChildItems()) {
       const att = await bestPdf(item);
-      if (att && await sendItem(att, playlist)) sent++;
+      if (att && await sendItem(item, att, playlist)) sent++;
     }
     for (const sub of c.getChildCollections()) {
       await walk(sub, path.concat(sub.name));  // subcollections become
@@ -116,7 +131,7 @@ async function listen(win) {
   for (const item of items) {
     const att = await bestPdf(item);
     if (!att) continue;
-    const id = await sendItem(att, null);
+    const id = await sendItem(item, att, null);
     if (id) lastId = id;
   }
   if (!lastId) {
