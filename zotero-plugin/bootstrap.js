@@ -76,6 +76,7 @@ async function sendItem(att, playlist) {
   const resp = await Zotero.HTTP.request("POST", base() + "/api/papers/by-path", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    timeout: 120000,  // default 30 s is too tight for very large PDFs
   });
   return JSON.parse(resp.responseText).id;
 }

@@ -162,7 +162,9 @@ def create_app(lib, worker):
                  "error": None, "duration": None, "resume_t": 0.0,
                  "added": time.time()}
         try:  # fast CPU pass: real title/authors on the card immediately
-            _, _, meta = extract_segments(paper_dir / "paper.pdf")
+            # capped to the front matter — a full-document pass on a long
+            # PDF blows past the Zotero plugin's HTTP timeout
+            _, _, meta = extract_segments(paper_dir / "paper.pdf", max_pages=3)
             if meta["title"]:
                 entry["title"] = clean_text(meta["title"])
             entry["authors"] = meta["authors"]

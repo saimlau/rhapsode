@@ -174,9 +174,9 @@ def split_sentences(mt, limit=450):
 
 # ---------------------------------------------------------------- extraction
 
-def _body_font_size(doc):
+def _body_font_size(doc, max_pages=None):
     weights = {}
-    for page in doc:
+    for page in list(doc)[:max_pages]:
         for block in page.get_text("dict")["blocks"]:
             if block["type"] != 0:
                 continue
@@ -372,14 +372,14 @@ def _page_year(page):
     return int(max(counts, key=lambda y: (counts[y], y)))
 
 
-def extract_segments(pdf_path):
+def extract_segments(pdf_path, max_pages=None):
     """Return (segments, found_references, meta).
 
     segments: list of (kind, MappedText) in reading order, kind in
     {'heading', 'body'}; meta: {'title', 'authors', 'year'}.
     """
     doc = fitz.open(pdf_path)
-    body_size = _body_font_size(doc)
+    body_size = _body_font_size(doc, max_pages)
     segments = []
     meta = {"title": None, "authors": None,
             "year": _page_year(doc[0]) if len(doc) else None}
@@ -414,6 +414,8 @@ def extract_segments(pdf_path):
         return 6 <= len(fl) <= 45 and any(fl in h for h in header_texts)
 
     for page_no, page in enumerate(doc):
+        if max_pages is not None and page_no >= max_pages:
+            break  # metadata-only fast pass (ingest): front matter suffices
         height = page.rect.height
         blocks = [b for b in page.get_text("rawdict")["blocks"] if b["type"] == 0]
         for block in _order_blocks(blocks, page.rect.width):
