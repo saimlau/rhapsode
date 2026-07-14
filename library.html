@@ -146,7 +146,7 @@ body { display: flex; background: var(--desk); font-family: var(--sans);
 "use strict";
 const $ = id => document.getElementById(id);
 let state = { papers: {}, order: [], settings: {} };
-let currentId = null, dragId = null;
+let currentId = null, dragId = null, dragAt = 0;
 
 // ------------------------------------------------------------- rendering
 function fmt(t) {
@@ -251,6 +251,8 @@ $("queue").addEventListener("click", e => {
         .then(r => { if (!r.ok) r.json().then(j => toast(j.detail));
                      if (id === currentId) { currentId = null; render(); } });
   } else if (act === "regen") {
+    const st = state.papers[id]?.status;
+    if (st === "generating" || st === "pending") return;  // no ↻ spam
     fetch(`/api/papers/${id}/regenerate`, { method: "POST" });
   } else {
     play(id, true);
@@ -258,7 +260,8 @@ $("queue").addEventListener("click", e => {
 });
 $("queue").addEventListener("dragstart", e => {
   const row = e.target.closest(".row");
-  if (row) { dragId = row.dataset.id; row.classList.add("dragging"); }
+  if (row) { dragId = row.dataset.id; dragAt = Date.now();
+             row.classList.add("dragging"); }
 });
 $("queue").addEventListener("dragover", e => {
   e.preventDefault();
@@ -341,7 +344,10 @@ function apply(snap) {
     pendingPlay = null;
     play(id, true);
   }
-  if (dragId) return;          // don't fight an in-progress drag
+  // don't fight an in-progress drag — but a cancelled drag must not
+  // freeze rendering forever, so the guard expires
+  if (dragId && Date.now() - dragAt < 10000) return;
+  dragId = null;
   render();
 }
 const es = new EventSource("/api/events");

@@ -88,10 +88,10 @@ class Worker(threading.Thread):
         while True:
             pid = self.q.get()
             with self.lib.lock:
-                if pid not in self.lib.data["papers"]:
-                    continue  # deleted while queued
-                self.lib.data["papers"][pid].update(status="generating",
-                                                    progress=0.0, error=None)
+                entry = self.lib.data["papers"].get(pid)
+                if entry is None or entry["status"] != "pending":
+                    continue  # deleted, or a duplicate queue entry
+                entry.update(status="generating", progress=0.0, error=None)
                 self.lib.save()
             last = [0.0]
 
@@ -197,12 +197,12 @@ def create_app(lib, worker):
     def regenerate(pid: str):
         with lib.lock:
             entry = lib.paper(pid)
-            if entry["status"] == "generating":
-                raise HTTPException(409, "already generating")
+            if entry["status"] in ("generating", "pending"):
+                return {"ok": True, "queued": False}  # dedupe repeat clicks
             entry.update(status="pending", progress=0.0, error=None)
             lib.save()
         worker.enqueue(pid)
-        return {"ok": True}
+        return {"ok": True, "queued": True}
 
     @app.post("/api/papers/{pid}/position")
     def position(pid: str, body: dict):
