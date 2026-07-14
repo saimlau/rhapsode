@@ -20,6 +20,8 @@ dpi = 150
 [gui]
 # Port for `paper2audio --gui` (auto-probes upward if busy).
 port = 7717
+# Open a browser tab when the server starts (set false if you keep a tab).
+open = true
 
 [grobid]
 # GROBID (scholarly-PDF structure ML) as the primary extractor; the

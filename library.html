@@ -91,6 +91,8 @@ body { display: flex; background: var(--desk); font-family: var(--sans);
 @media (prefers-color-scheme: dark) { .row:hover { background: rgba(255,255,255,.04); } }
 .row.playing { border-left-color: var(--marker); background: var(--marker-wash); }
 .row.dragging { opacity: .4; }
+.row.sel { background: rgba(245, 179, 1, .09); box-shadow: inset 0 0 0 1px
+           rgba(245, 179, 1, .45); }
 .row .t { font: 14px/1.4 var(--serif); }
 .row .sub {
   margin-top: 4px; display: flex; align-items: baseline; gap: 8px;
@@ -168,6 +170,7 @@ const $ = id => document.getElementById(id);
 let state = { papers: {}, order: [], playlists: {}, settings: {} };
 let currentId = null, dragId = null, dragAt = 0;
 let activePl = localStorage.getItem("paper2audio.activePl") || null;
+let selected = new Set(), lastIdx = null;
 
 const jbody = obj => ({ headers: { "Content-Type": "application/json" },
                         body: JSON.stringify(obj) });
@@ -179,6 +182,8 @@ function visibleIds() {
   return state.order;
 }
 function setActivePl(plid) {
+  selected.clear();
+  lastIdx = null;
   activePl = plid && playlists()[plid] ? plid : null;
   if (activePl) localStorage.setItem("paper2audio.activePl", activePl);
   else localStorage.removeItem("paper2audio.activePl");
@@ -190,12 +195,22 @@ function showMenu(items, x, y) {
   for (const it of items) {
     const b = document.createElement("button");
     b.textContent = it.label;
+    if (it.depth) b.style.paddingLeft = (12 + it.depth * 16) + "px";
     b.onclick = () => { m.style.display = "none"; it.action(); };
     m.appendChild(b);
   }
   m.style.display = "block";
   m.style.left = Math.min(x, innerWidth - 230) + "px";
   m.style.top = Math.min(y, innerHeight - m.offsetHeight - 10) + "px";
+}
+function playlistEntries() {
+  // sorted so "Parent / Child" groups under "Parent", indented by depth
+  return Object.entries(playlists())
+    .sort((a, b) => a[1].name.localeCompare(b[1].name))
+    .map(([plid, pl]) => {
+      const segs = pl.name.split(" / ");
+      return { plid, depth: segs.length - 1, label: segs[segs.length - 1] };
+    });
 }
 addEventListener("pointerdown", e => {
   if (!$("plmenu").contains(e.target)) $("plmenu").style.display = "none";
@@ -243,7 +258,8 @@ function render() {
     const p = state.papers[id];
     if (!p) continue;
     const row = document.createElement("div");
-    row.className = "row" + (id === currentId ? " playing" : "");
+    row.className = "row" + (id === currentId ? " playing" : "")
+                  + (selected.has(id) ? " sel" : "");
     row.draggable = true;
     row.dataset.id = id;
     const pct = Math.round((p.progress || 0) * 100);
@@ -332,9 +348,108 @@ $("queue").addEventListener("click", e => {
     if (st === "generating" || st === "pending") return;  // no ↻ spam
     fetch(`/api/papers/${id}/regenerate`, { method: "POST" });
   } else {
+    const ids = visibleIds();
+    if (e.shiftKey && lastIdx !== null) {       // range select
+      const i = ids.indexOf(id);
+      for (let k = Math.min(lastIdx, i); k <= Math.max(lastIdx, i); k++) {
+        selected.add(ids[k]);
+      }
+      render();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {               // toggle select
+      selected.has(id) ? selected.delete(id) : selected.add(id);
+      lastIdx = ids.indexOf(id);
+      render();
+      return;
+    }
+    selected.clear();
+    lastIdx = ids.indexOf(id);
     play(id, true);
   }
 });
+$("queue").addEventListener("mousedown", e => {
+  if (e.shiftKey) e.preventDefault();  // no text selection on range-select
+});
+$("queue").addEventListener("contextmenu", e => {
+  e.preventDefault();
+  const row = e.target.closest(".row");
+  if (row && !selected.has(row.dataset.id)) {
+    selected.clear();
+    selected.add(row.dataset.id);
+    lastIdx = visibleIds().indexOf(row.dataset.id);
+    render();
+  }
+  const n = selected.size, x = e.clientX, y = e.clientY;
+  const items = [];
+  if (n) {
+    const noun = n > 1 ? `${n} papers` : "paper";
+    items.push({ label: `Add ${noun} to playlist…`,
+                 action: () => addToPlaylistMenu([...selected], x, y) });
+    if (activePl) {
+      items.push({ label: `Remove ${noun} from playlist`, action: () => {
+        for (const id of selected) {
+          fetch(`/api/playlists/${activePl}/papers/${id}`, { method: "DELETE" });
+        }
+        selected.clear();
+      }});
+    } else {
+      items.push({ label: `Remove ${noun} from library…`, action: () => {
+        if (!confirm(`Delete ${noun} (and audio) from the library?`)) return;
+        for (const id of selected) {
+          fetch(`/api/papers/${id}`, { method: "DELETE" });
+          if (id === currentId) currentId = null;
+        }
+        selected.clear();
+      }});
+    }
+    items.push({ label: `Regenerate ${noun}`, action: () => {
+      for (const id of selected) {
+        fetch(`/api/papers/${id}/regenerate`, { method: "POST" });
+      }
+    }});
+  }
+  items.push({ label: "Sort by…", action: () => sortMenu(x, y) });
+  showMenu(items, x, y);
+});
+function addToPlaylistMenu(ids, x, y) {
+  const add = plid => { for (const id of ids) {
+    fetch(`/api/playlists/${plid}/papers`, { method: "POST", ...jbody({ id }) });
+  } };
+  const items = playlistEntries().map(en => ({
+    label: en.label, depth: en.depth, action: () => add(en.plid) }));
+  items.push({ label: "＋ New playlist…", action: async () => {
+    const name = prompt("Playlist name:");
+    if (!name) return;
+    const r = await fetch("/api/playlists", { method: "POST", ...jbody({ name }) });
+    add((await r.json()).id);
+  }});
+  showMenu(items, x, y);
+}
+function sortMenu(x, y) {
+  const apply = cmp => {
+    const ids = [...visibleIds()].sort(
+      (a, b) => cmp(state.papers[a], state.papers[b]));
+    if (activePl && playlists()[activePl]) {
+      playlists()[activePl].order = ids;
+      fetch(`/api/playlists/${activePl}`, { method: "PUT", ...jbody({ order: ids }) });
+    } else {
+      state.order = ids;
+      fetch("/api/queue", { method: "PUT", ...jbody({ order: ids }) });
+    }
+    render();
+  };
+  const str = f => (a, b) =>
+    String(f(a) ?? "").localeCompare(String(f(b) ?? ""));
+  const desc = f => (a, b) => (f(b) ?? 0) - (f(a) ?? 0);
+  showMenu([
+    { label: "Sort by title", action: () => apply(str(p => p.title)) },
+    { label: "Sort by first author", action: () => apply(str(p => p.authors)) },
+    { label: "Sort by year (newest)", action: () => apply(desc(p => p.year)) },
+    { label: "Sort by duration", action: () => apply(desc(p => p.duration)) },
+    { label: "Sort by recently added", action: () => apply(desc(p => p.added)) },
+  ], x, y);
+}
 $("queue").addEventListener("dragstart", e => {
   const row = e.target.closest(".row");
   if (row) { dragId = row.dataset.id; dragAt = Date.now();
@@ -418,8 +533,9 @@ addEventListener("drop", e => { e.preventDefault(); acceptFiles(e.dataTransfer.f
 // ------------------------------------------------------------- live state
 $("plTitle").onclick = e => {
   const items = [{ label: "All papers", action: () => setActivePl(null) }];
-  for (const [plid, pl] of Object.entries(playlists())) {
-    items.push({ label: pl.name, action: () => setActivePl(plid) });
+  for (const en of playlistEntries()) {
+    items.push({ label: en.label, depth: en.depth,
+                 action: () => setActivePl(en.plid) });
   }
   items.push({ label: "＋ New playlist…", action: () => newPlaylist(null) });
   if (activePl) {

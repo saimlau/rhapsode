@@ -10,7 +10,7 @@ DEFAULTS = {
     "library": {"path": "~/PaperAudio"},
     "tts": {"voice": "af_heart", "speed": 1.0},
     "render": {"dpi": 150},
-    "gui": {"port": 7717},
+    "gui": {"port": 7717, "open": True},
     "grobid": {"enabled": True, "url": "http://127.0.0.1:8070",
                "autostart": True, "home": None},
 }
