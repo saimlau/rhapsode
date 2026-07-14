@@ -69,14 +69,42 @@ async function ensureServer() {
     + repo + "/paper2audio --gui --no-open)");
 }
 
-async function sendItem(att) {
+async function sendItem(att, playlist) {
   const path = await att.getFilePathAsync();
   if (!path) return null;
+  const body = playlist ? { path, playlist } : { path };
   const resp = await Zotero.HTTP.request("POST", base() + "/api/papers/by-path", {
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path }),
+    body: JSON.stringify(body),
   });
   return JSON.parse(resp.responseText).id;
+}
+
+async function bestPdf(item) {
+  let att = null;
+  if (item.isAttachment()) att = item;
+  else if (item.isRegularItem()) att = await item.getBestAttachment();
+  return att && att.attachmentContentType === "application/pdf" ? att : null;
+}
+
+async function listenCollection(win) {
+  const col = win.ZoteroPane.getSelectedCollection();
+  if (!col) throw new Error("No collection selected");
+  await ensureServer();
+  let sent = 0;
+  const walk = async (c, path) => {
+    const playlist = path.join(" / ");
+    for (const item of c.getChildItems()) {
+      const att = await bestPdf(item);
+      if (att && await sendItem(att, playlist)) sent++;
+    }
+    for (const sub of c.getChildCollections()) {
+      await walk(sub, path.concat(sub.name));  // subcollections become
+    }                                          // "Parent / Child" playlists
+  };
+  await walk(col, [col.name]);
+  if (!sent) throw new Error("No PDF attachments found in this collection");
+  openTab(win, base() + "/?playlist=" + encodeURIComponent(col.name));
 }
 
 async function listen(win) {
@@ -85,14 +113,9 @@ async function listen(win) {
   await ensureServer();
   let lastId = null;
   for (const item of items) {
-    let att = null;
-    if (item.isAttachment()) {
-      att = item;
-    } else if (item.isRegularItem()) {
-      att = await item.getBestAttachment();
-    }
-    if (!att || att.attachmentContentType !== "application/pdf") continue;
-    const id = await sendItem(att);
+    const att = await bestPdf(item);
+    if (!att) continue;
+    const id = await sendItem(att, null);
     if (id) lastId = id;
   }
   if (!lastId) {
@@ -169,17 +192,17 @@ function startup({ rootURI: uri }) {
   }
 }
 
-function onMainWindowLoad({ window: win }) {
+function _addMenuItem(win, menuId, itemId, label, handler) {
   const doc = win.document;
-  const menu = doc.getElementById("zotero-itemmenu");
-  if (!menu || doc.getElementById("paper2audio-menuitem")) return;
+  const menu = doc.getElementById(menuId);
+  if (!menu || doc.getElementById(itemId)) return;
   const sep = doc.createXULElement("menuseparator");
-  sep.id = "paper2audio-menusep";
+  sep.id = itemId + "-sep";
   const item = doc.createXULElement("menuitem");
-  item.id = "paper2audio-menuitem";
-  item.setAttribute("label", "Listen with paper2audio");
+  item.id = itemId;
+  item.setAttribute("label", label);
   item.addEventListener("command", () => {
-    listen(win).catch(err => {
+    handler(win).catch(err => {
       log("error: " + err);
       Services.prompt.alert(win, "paper2audio", String(err.message || err));
     });
@@ -188,8 +211,16 @@ function onMainWindowLoad({ window: win }) {
   menu.appendChild(item);
 }
 
+function onMainWindowLoad({ window: win }) {
+  _addMenuItem(win, "zotero-itemmenu", "paper2audio-menuitem",
+               "Listen with paper2audio", listen);
+  _addMenuItem(win, "zotero-collectionmenu", "paper2audio-colmenuitem",
+               "Listen to collection with paper2audio", listenCollection);
+}
+
 function onMainWindowUnload({ window: win }) {
-  for (const id of ["paper2audio-menuitem", "paper2audio-menusep"]) {
+  for (const id of ["paper2audio-menuitem", "paper2audio-menuitem-sep",
+                    "paper2audio-colmenuitem", "paper2audio-colmenuitem-sep"]) {
     win.document.getElementById(id)?.remove();
   }
   tabByWindow.delete(win);

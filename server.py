@@ -35,10 +35,11 @@ class Library:
         self.file = root / "library.json"
         self.lock = threading.RLock()
         self.version = 1
-        self.data = {"papers": {}, "order": [],
+        self.data = {"papers": {}, "order": [], "playlists": {},
                      "settings": {"auto_advance": True}}
         if self.file.is_file():
             self.data.update(json.loads(self.file.read_text()))
+        self.data.setdefault("playlists", {})  # pre-playlist registries
 
     def save(self, bump=True):
         with self.lock:
@@ -64,6 +65,15 @@ class Library:
         with self.lock:
             self.data["papers"][pid].update(fields)
             self.save(bump)
+
+    def playlist_by_name(self, name):
+        """Find-or-create a playlist; the slug id makes repeats idempotent."""
+        with self.lock:
+            plid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "pl"
+            if plid not in self.data["playlists"]:
+                self.data["playlists"][plid] = {"name": name, "order": []}
+                self.save()
+            return plid
 
     def pdf_path(self, pid):
         return self.root / pid / "paper.pdf"
@@ -175,11 +185,78 @@ def create_app(lib, worker):
     @app.post("/api/papers/by-path")
     def add_by_path(body: dict):
         """Ingest a local PDF by absolute path (used by the Zotero plugin;
-        the server is localhost-only, so the caller is on this machine)."""
+        the server is localhost-only, so the caller is on this machine).
+        Optional `playlist` name: append the paper to it (created if new)."""
         src = Path(str(body.get("path", ""))).expanduser()
         if not src.is_file():
             raise HTTPException(404, f"no such file: {src}")
-        return _ingest(src.name, src.read_bytes())
+        resp = _ingest(src.name, src.read_bytes())
+        name = str(body.get("playlist", "")).strip()
+        if name:
+            pid = json.loads(resp.body)["id"]
+            plid = lib.playlist_by_name(name)
+            with lib.lock:
+                order = lib.data["playlists"][plid]["order"]
+                if pid not in order:
+                    order.append(pid)
+                    lib.save()
+            return JSONResponse({**json.loads(resp.body), "playlist": plid})
+        return resp
+
+    @app.post("/api/playlists")
+    def create_playlist(body: dict):
+        name = str(body.get("name", "")).strip()
+        if not name:
+            raise HTTPException(400, "playlist name required")
+        return {"id": lib.playlist_by_name(name)}
+
+    @app.put("/api/playlists/{plid}")
+    def update_playlist(plid: str, body: dict):
+        with lib.lock:
+            pl = lib.data["playlists"].get(plid)
+            if not pl:
+                raise HTTPException(404, "unknown playlist")
+            if body.get("name"):
+                pl["name"] = str(body["name"]).strip()
+            if "order" in body:
+                if sorted(body["order"]) != sorted(pl["order"]):
+                    raise HTTPException(400, "order must contain exactly the "
+                                             "playlist's papers")
+                pl["order"] = body["order"]
+            lib.save()
+        return {"ok": True}
+
+    @app.delete("/api/playlists/{plid}")
+    def delete_playlist(plid: str):
+        with lib.lock:
+            if plid not in lib.data["playlists"]:
+                raise HTTPException(404, "unknown playlist")
+            del lib.data["playlists"][plid]
+            lib.save()
+        return {"ok": True}
+
+    @app.post("/api/playlists/{plid}/papers")
+    def playlist_add(plid: str, body: dict):
+        pid = str(body.get("id", ""))
+        lib.paper(pid)
+        with lib.lock:
+            pl = lib.data["playlists"].get(plid)
+            if not pl:
+                raise HTTPException(404, "unknown playlist")
+            if pid not in pl["order"]:
+                pl["order"].append(pid)
+                lib.save()
+        return {"ok": True}
+
+    @app.delete("/api/playlists/{plid}/papers/{pid}")
+    def playlist_remove(plid: str, pid: str):
+        with lib.lock:
+            pl = lib.data["playlists"].get(plid)
+            if not pl:
+                raise HTTPException(404, "unknown playlist")
+            pl["order"] = [x for x in pl["order"] if x != pid]
+            lib.save()
+        return {"ok": True}
 
     @app.delete("/api/papers/{pid}")
     def delete_paper(pid: str):
@@ -189,6 +266,8 @@ def create_app(lib, worker):
                 raise HTTPException(409, "paper is generating; try again after")
             del lib.data["papers"][pid]
             lib.data["order"] = [x for x in lib.data["order"] if x != pid]
+            for pl in lib.data["playlists"].values():
+                pl["order"] = [x for x in pl["order"] if x != pid]
             lib.save()
         shutil.rmtree(lib.root / pid, ignore_errors=True)
         return {"ok": True}

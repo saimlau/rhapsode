@@ -27,11 +27,19 @@ reorder; hover a card for regenerate/remove.
 The library (imported PDFs + generated bundles + `library.json`) lives at
 the path set in `config.toml`.
 
+Papers can be organized into **playlists** (a paper may be in several;
+audio exists once): the sidebar header switches between All papers and
+named playlists, ＋ on a paper row adds it to one, and within a playlist
+✕ removes it from the playlist only. Reorder and auto-advance follow the
+active playlist.
+
 ## Zotero plugin
 
 `zotero-plugin/` adds "Listen with paper2audio" to Zotero's item context
-menu: the selected item's PDF goes to the local server and the read-along
-opens inside a Zotero tab (the server is auto-started if needed). Install
+menu (PDF → local server, read-along in a Zotero tab, server auto-started)
+and "Listen to collection with paper2audio" to the collection menu: every
+PDF in the collection becomes part of a playlist named after it, with
+subcollections as their own "Parent / Child" playlists. Install
 for development with `zotero-plugin/dev-install.sh` while Zotero is
 closed, then restart Zotero. Requires Zotero 7/8.
 

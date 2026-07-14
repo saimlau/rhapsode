@@ -54,7 +54,25 @@ body { display: flex; background: var(--desk); font-family: var(--sans);
 }
 #side header h1 {
   margin: 0; font: 600 11px var(--sans); letter-spacing: .14em;
-  text-transform: uppercase; color: var(--muted);
+  text-transform: uppercase; color: var(--muted); cursor: pointer;
+  max-width: 220px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
+}
+#side header h1:hover { color: var(--ink); }
+#plmenu {
+  position: fixed; display: none; z-index: 70; min-width: 210px;
+  background: var(--side); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: 10px; padding: 4px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .25);
+}
+#plmenu button {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  color: inherit; padding: 8px 12px; border-radius: 7px; cursor: pointer;
+  font: 12.5px var(--sans);
+}
+#plmenu button:hover { background: rgba(0, 0, 0, .06); }
+@media (prefers-color-scheme: dark) {
+  #plmenu button:hover { background: rgba(255, 255, 255, .06); }
 }
 #side header .n { font: 11px var(--mono); color: var(--muted); }
 #drop {
@@ -130,7 +148,8 @@ body { display: flex; background: var(--desk); font-family: var(--sans);
 </div>
 
 <aside id="side">
-  <header><h1>Up next</h1><span class="n" id="count"></span></header>
+  <header><h1 id="plTitle" title="Switch playlist">All papers ▾</h1>
+    <span class="n" id="count"></span></header>
   <div id="drop">Drop PDFs or click to add</div>
   <input id="file" type="file" accept="application/pdf" multiple hidden>
   <div id="queue"></div>
@@ -140,13 +159,56 @@ body { display: flex; background: var(--desk); font-family: var(--sans);
 </aside>
 
 <div id="overlay"><div class="inner">Drop to add to library</div></div>
+<div id="plmenu"></div>
 <div id="toast"></div>
 
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-let state = { papers: {}, order: [], settings: {} };
+let state = { papers: {}, order: [], playlists: {}, settings: {} };
 let currentId = null, dragId = null, dragAt = 0;
+let activePl = localStorage.getItem("paper2audio.activePl") || null;
+
+const jbody = obj => ({ headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(obj) });
+function playlists() { return state.playlists || {}; }
+function visibleIds() {
+  if (activePl && playlists()[activePl]) {
+    return playlists()[activePl].order.filter(id => state.papers[id]);
+  }
+  return state.order;
+}
+function setActivePl(plid) {
+  activePl = plid && playlists()[plid] ? plid : null;
+  if (activePl) localStorage.setItem("paper2audio.activePl", activePl);
+  else localStorage.removeItem("paper2audio.activePl");
+  render();
+}
+function showMenu(items, x, y) {
+  const m = $("plmenu");
+  m.innerHTML = "";
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.textContent = it.label;
+    b.onclick = () => { m.style.display = "none"; it.action(); };
+    m.appendChild(b);
+  }
+  m.style.display = "block";
+  m.style.left = Math.min(x, innerWidth - 230) + "px";
+  m.style.top = Math.min(y, innerHeight - m.offsetHeight - 10) + "px";
+}
+addEventListener("pointerdown", e => {
+  if (!$("plmenu").contains(e.target)) $("plmenu").style.display = "none";
+});
+async function newPlaylist(thenAdd) {
+  const name = prompt("Playlist name:");
+  if (!name) return;
+  const r = await fetch("/api/playlists", { method: "POST", ...jbody({ name }) });
+  const plid = (await r.json()).id;
+  if (thenAdd) await fetch(`/api/playlists/${plid}/papers`,
+                           { method: "POST", ...jbody({ id: thenAdd }) });
+  else setActivePl(plid);
+}
 
 // ------------------------------------------------------------- rendering
 function fmt(t) {
@@ -171,11 +233,13 @@ function citation(p) {
 
 function render() {
   const q = $("queue");
-  const ready = state.order.filter(id => state.papers[id]?.status === "ready");
-  $("count").textContent = state.order.length ?
-    `${ready.length}/${state.order.length}` : "";
+  const ids = visibleIds();
+  const pl = activePl && playlists()[activePl];
+  $("plTitle").textContent = (pl ? pl.name : "All papers") + " ▾";
+  const ready = ids.filter(id => state.papers[id]?.status === "ready");
+  $("count").textContent = ids.length ? `${ready.length}/${ids.length}` : "";
   q.innerHTML = "";
-  for (const id of state.order) {
+  for (const id of ids) {
     const p = state.papers[id];
     if (!p) continue;
     const row = document.createElement("div");
@@ -194,8 +258,10 @@ function render() {
         ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}
       ${p.status === "error" ? `<div class="err">${esc(p.error)}</div>` : ""}
       <div class="acts">
+        <button data-act="pl" title="Add to playlist">＋</button>
         <button data-act="regen" title="Regenerate">↻</button>
-        <button data-act="del" title="Remove from library">✕</button>
+        <button data-act="del" title="${activePl
+          ? "Remove from this playlist" : "Remove from library"}">✕</button>
       </div>`;
     q.appendChild(row);
   }
@@ -216,7 +282,7 @@ function play(id, autoplay) {
   render();
 }
 function nextReady(afterId) {
-  const ids = state.order.filter(id => state.papers[id]?.status === "ready");
+  const ids = visibleIds().filter(id => state.papers[id]?.status === "ready");
   const i = ids.indexOf(afterId);
   return i >= 0 && i + 1 < ids.length ? ids[i + 1] : null;
 }
@@ -246,10 +312,21 @@ $("queue").addEventListener("click", e => {
   if (!row) return;
   const id = row.dataset.id, act = e.target.dataset.act;
   if (act === "del") {
-    if (confirm("Remove this paper (and its audio) from the library?"))
+    if (activePl) {
+      fetch(`/api/playlists/${activePl}/papers/${id}`, { method: "DELETE" });
+    } else if (confirm("Remove this paper (and its audio) from the library?")) {
       fetch(`/api/papers/${id}`, { method: "DELETE" })
         .then(r => { if (!r.ok) r.json().then(j => toast(j.detail));
                      if (id === currentId) { currentId = null; render(); } });
+    }
+  } else if (act === "pl") {
+    const items = Object.entries(playlists()).map(([plid, pl]) => ({
+      label: pl.name,
+      action: () => fetch(`/api/playlists/${plid}/papers`,
+                          { method: "POST", ...jbody({ id }) }),
+    }));
+    items.push({ label: "＋ New playlist…", action: () => newPlaylist(id) });
+    showMenu(items, e.clientX, e.clientY);
   } else if (act === "regen") {
     const st = state.papers[id]?.status;
     if (st === "generating" || st === "pending") return;  // no ↻ spam
@@ -275,11 +352,14 @@ $("queue").addEventListener("dragover", e => {
 $("queue").addEventListener("dragend", () => {
   document.querySelector(".row.dragging")?.classList.remove("dragging");
   const order = [...document.querySelectorAll(".row")].map(c => c.dataset.id);
-  if (order.join() !== state.order.join()) {
+  if (activePl && playlists()[activePl]) {
+    if (order.join() !== playlists()[activePl].order.join()) {
+      playlists()[activePl].order = order;
+      fetch(`/api/playlists/${activePl}`, { method: "PUT", ...jbody({ order }) });
+    }
+  } else if (order.join() !== state.order.join()) {
     state.order = order;
-    fetch("/api/queue", { method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ order }) });
+    fetch("/api/queue", { method: "PUT", ...jbody({ order }) });
   }
   dragId = null;
 });
@@ -336,9 +416,35 @@ addEventListener("dragover", e => {
 addEventListener("drop", e => { e.preventDefault(); acceptFiles(e.dataTransfer.files); });
 
 // ------------------------------------------------------------- live state
+$("plTitle").onclick = e => {
+  const items = [{ label: "All papers", action: () => setActivePl(null) }];
+  for (const [plid, pl] of Object.entries(playlists())) {
+    items.push({ label: pl.name, action: () => setActivePl(plid) });
+  }
+  items.push({ label: "＋ New playlist…", action: () => newPlaylist(null) });
+  if (activePl) {
+    items.push({ label: "✕ Delete this playlist", action: async () => {
+      if (confirm("Delete this playlist? Papers stay in the library.")) {
+        await fetch(`/api/playlists/${activePl}`, { method: "DELETE" });
+        setActivePl(null);
+      }
+    }});
+  }
+  showMenu(items, e.clientX, e.clientY);
+};
+
 let pendingPlay = new URLSearchParams(location.search).get("play");
+let pendingPl = new URLSearchParams(location.search).get("playlist");
 function apply(snap) {
   state = snap;
+  if (pendingPl) {  // deep link: playlist by id or name
+    const byName = Object.keys(playlists()).find(k =>
+      k === pendingPl ||
+      playlists()[k].name.toLowerCase() === pendingPl.toLowerCase());
+    if (byName) { activePl = byName;
+                  localStorage.setItem("paper2audio.activePl", byName); }
+    pendingPl = null;
+  }
   if (pendingPlay && state.papers[pendingPlay]?.status === "ready") {
     const id = pendingPlay;      // deep link (?play=): start once ready
     pendingPlay = null;
@@ -355,7 +461,7 @@ es.onmessage = e => apply(JSON.parse(e.data));
 fetch("/api/library").then(r => r.json()).then(snap => {
   apply(snap);
   if (currentId || pendingPlay) return;
-  const first = snap.order.find(id => snap.papers[id]?.status === "ready");
+  const first = visibleIds().find(id => snap.papers[id]?.status === "ready");
   if (first) play(first, false);   // open first ready paper, paused
 });
 </script>
