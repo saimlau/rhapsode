@@ -337,5 +337,7 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None):
         threading.Timer(1.0, lambda: subprocess.Popen(
             ["xdg-open", url], stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL)).start()
+    # never-ending SSE streams would make graceful shutdown wait forever
+    # (Ctrl+C seemingly dead); force-close connections after a short grace
     uvicorn.run(create_app(lib, worker), host="127.0.0.1", port=port,
-                log_level="warning")
+                log_level="warning", timeout_graceful_shutdown=3)
