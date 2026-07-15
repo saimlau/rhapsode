@@ -10,12 +10,14 @@ app. See docs/superpowers/specs/.
 """
 
 import argparse
+import gc
 import json
+import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
+import time
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -30,7 +32,9 @@ PARAGRAPH_PAUSE_S = 0.35
 SENTENCE_PAUSE_S = 0.08
 
 _PIPELINE = None  # warm Kokoro model, reused across papers in one process
-TTS_LOCK = threading.Lock()  # one inference at a time (worker + /tts endpoint)
+_PIPE_STATE = {"last_used": 0.0, "parked": False}
+TTS_LOCK = threading.Lock()  # one inference at a time (worker + /tts
+                             # endpoint) and all pipeline state transitions
 
 
 def prepare_units(pdf_path, grobid_cfg=None):
@@ -106,76 +110,143 @@ def make_tags(pdf_path, meta):
 # ----------------------------------------------------------------- synthesis
 
 def get_pipeline():
-    """Load Kokoro once per process; queued papers reuse the warm model."""
+    """Load Kokoro on demand; queued papers reuse the warm model. The whole
+    check-load-unpark sequence holds TTS_LOCK so concurrent first callers
+    (worker + /tts) can't double-load."""
     global _PIPELINE
-    if _PIPELINE is None:
+    with TTS_LOCK:
+        if _PIPELINE is None:
+            import torch
+            from kokoro import KPipeline
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            if device == "cpu":
+                print("warning: CUDA not available, synthesizing on CPU (slower)")
+            _PIPELINE = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M",
+                                  device=device)
+            _PIPE_STATE["parked"] = False
+        elif _PIPE_STATE["parked"]:
+            import torch
+            if torch.cuda.is_available():
+                _PIPELINE.model.to("cuda")
+            _PIPE_STATE["parked"] = False
+        _PIPE_STATE["last_used"] = time.time()
+        return _PIPELINE
+
+
+def maybe_idle_models(park_after_s, unload_after_s):
+    """Tiered idle release, called periodically by the server's worker:
+    park the model to CPU RAM after park_after_s (~0.05 s to resume),
+    drop it entirely after unload_after_s (~2 s to rebuild). Holding
+    TTS_LOCK means transitions can't race an in-flight synthesis."""
+    global _PIPELINE
+    with TTS_LOCK:
+        if _PIPELINE is None:
+            return "unloaded"
         import torch
-        from kokoro import KPipeline
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        if device == "cpu":
-            print("warning: CUDA not available, synthesizing on CPU (slower)")
-        _PIPELINE = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M",
-                              device=device)
-    return _PIPELINE
+        idle = time.time() - _PIPE_STATE["last_used"]
+        if idle >= unload_after_s:
+            _PIPELINE = None
+            _PIPE_STATE["parked"] = False
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print(f"kokoro: unloaded after {idle:.0f}s idle")
+            return "unloaded"
+        if idle >= park_after_s and not _PIPE_STATE["parked"]:
+            if torch.cuda.is_available():
+                _PIPELINE.model.to("cpu")
+                torch.cuda.empty_cache()
+            _PIPE_STATE["parked"] = True
+            print(f"kokoro: parked to CPU after {idle:.0f}s idle")
+        return "parked" if _PIPE_STATE["parked"] else "loaded"
 
 
-def synthesize(units, out_path, voice, speed, tags=None, progress=None):
-    """Synthesize units to MP3/M4A, recording per-unit start/end times and
-    (when Kokoro provides them) per-word timestamps. progress(i, n, text)
-    is called per unit when given; otherwise progress prints to stdout."""
+def pipeline_status():
+    if _PIPELINE is None:
+        return {"state": "unloaded"}
+    return {"state": "parked" if _PIPE_STATE["parked"] else "loaded",
+            "idle_s": round(time.time() - _PIPE_STATE["last_used"], 1)}
+
+
+def synthesize(units, out_path, voice, speed, tags=None, progress=None,
+               bitrate="48k"):
+    """Synthesize units, streaming raw PCM into ffmpeg as it is produced —
+    encoding overlaps GPU synthesis, only one chunk is ever in RAM, and no
+    temp WAV touches disk. Writes to <out>.part and renames on success so a
+    crash never leaves a truncated file at the final path. Records per-unit
+    start/end times and (when Kokoro provides them) per-word timestamps.
+    progress(i, n, text) is called per unit when given; otherwise prints."""
     import numpy as np
-    import soundfile as sf
 
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg not found on PATH (needed for audio encoding)")
     pipeline = get_pipeline()
 
-    parts, samples = [], 0
-    for i, unit in enumerate(units, 1):
-        text = unit["text"]
-        if progress:
-            progress(i, len(units), text)
-        else:
-            print(f"  [{i}/{len(units)}] {text[:60]}...", flush=True)
-        unit["t0"] = samples / SAMPLE_RATE
-        words = []
-        with TTS_LOCK:
-            results = list(pipeline(text, voice=voice, speed=speed))
-        for item in results:
-            audio = getattr(item, "audio", None)
-            if audio is None:
-                _, _, audio = item
-            chunk_t0 = samples / SAMPLE_RATE
-            for tok in getattr(item, "tokens", None) or []:
-                if getattr(tok, "start_ts", None) is not None:
-                    words.append({"w": tok.text,
-                                  "t0": round(chunk_t0 + tok.start_ts, 3),
-                                  "t1": round(chunk_t0 + tok.end_ts, 3)})
-            wave = audio.detach().cpu().numpy()
-            parts.append(wave)
-            samples += len(wave)
-        unit["t1"] = samples / SAMPLE_RATE
-        unit["words"] = words
-        silence = np.zeros(int(unit["pause"] * SAMPLE_RATE), dtype=np.float32)
-        parts.append(silence)
-        samples += len(silence)
+    # m4a for the read-along view: MP4's sample table makes browser seeks
+    # sample-accurate, unlike (VBR) MP3 which drifts on every seek
+    codec = (["-codec:a", "aac", "-b:a", bitrate, "-movflags", "+faststart"]
+             if out_path.suffix in (".m4a", ".mp4")
+             else ["-codec:a", "libmp3lame", "-q:a", "3"])
+    part = out_path.with_suffix(out_path.suffix + ".part")
+    cmd = ["ffmpeg", "-y", "-loglevel", "error",
+           "-f", "s16le", "-ar", str(SAMPLE_RATE), "-ac", "1", "-i", "pipe:0",
+           *codec]
+    for key, value in (tags or {}).items():
+        if value:
+            cmd += ["-metadata", f"{key}={value}"]
+    cmd += ["-f", "mp4" if out_path.suffix in (".m4a", ".mp4") else "mp3",
+            str(part)]
 
-    if progress:
-        progress(len(units), len(units), "encoding audio")
-    wave = np.concatenate(parts)
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
-        sf.write(tmp.name, wave, SAMPLE_RATE, subtype="PCM_16")
-        # m4a for the read-along view: MP4's sample table makes browser seeks
-        # sample-accurate, unlike (VBR) MP3 which drifts on every seek
-        codec = (["-codec:a", "aac", "-b:a", "96k", "-movflags", "+faststart"]
-                 if out_path.suffix in (".m4a", ".mp4")
-                 else ["-codec:a", "libmp3lame", "-q:a", "3"])
-        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", tmp.name] + codec
-        for key, value in (tags or {}).items():
-            if value:
-                cmd += ["-metadata", f"{key}={value}"]
-        subprocess.run(cmd + [str(out_path)], check=True)
-    return len(wave) / SAMPLE_RATE
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    samples = 0
+
+    def push(wave):
+        nonlocal samples
+        pcm = (np.clip(wave, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+        proc.stdin.write(pcm)
+        samples += len(wave)
+
+    try:
+        for i, unit in enumerate(units, 1):
+            text = unit["text"]
+            if progress:
+                progress(i, len(units), text)
+            else:
+                print(f"  [{i}/{len(units)}] {text[:60]}...", flush=True)
+            unit["t0"] = samples / SAMPLE_RATE
+            words = []
+            with TTS_LOCK:
+                results = list(pipeline(text, voice=voice, speed=speed))
+            for item in results:
+                audio = getattr(item, "audio", None)
+                if audio is None:
+                    _, _, audio = item
+                chunk_t0 = samples / SAMPLE_RATE
+                for tok in getattr(item, "tokens", None) or []:
+                    if getattr(tok, "start_ts", None) is not None:
+                        words.append({"w": tok.text,
+                                      "t0": round(chunk_t0 + tok.start_ts, 3),
+                                      "t1": round(chunk_t0 + tok.end_ts, 3)})
+                push(audio.detach().cpu().numpy())
+            unit["t1"] = samples / SAMPLE_RATE
+            unit["words"] = words
+            n_pause = int(unit["pause"] * SAMPLE_RATE)
+            proc.stdin.write(b"\x00\x00" * n_pause)
+            samples += n_pause
+        proc.stdin.close()
+        if proc.wait() != 0:
+            raise RuntimeError(f"ffmpeg encode failed (rc={proc.returncode})")
+        os.replace(part, out_path)
+    except BrokenPipeError:
+        proc.wait()
+        raise RuntimeError(f"ffmpeg died during encode (rc={proc.returncode})")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if part.exists():
+            part.unlink(missing_ok=True)
+    return samples / SAMPLE_RATE
 
 
 # ---------------------------------------------------------------- read-along
@@ -224,25 +295,25 @@ def write_viewer(out_dir, manifest):
 
 
 def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
-                       grobid_cfg=None):
+                       grobid_cfg=None, bitrate="48k"):
     """Full pipeline: PDF -> readalong bundle in out_dir. Returns summary
     dict. progress(fraction, label) covers the whole pipeline: synthesis
-    maps to 0-0.87, then encode/pages/manifest — so the bar doesn't sit at
-    a false 100% during the post-synthesis stages."""
+    (with encoding overlapped) maps to 0-0.95, then pages/manifest — so the
+    bar doesn't sit at a false 100% during the post-synthesis stages."""
     def unit_cb(i, n, text):
-        progress(0.87 * i / n, text)
+        progress(0.95 * i / n, text)
 
     units, meta, warnings = prepare_units(pdf_path, grobid_cfg)
     tags = make_tags(pdf_path, meta)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "narration.mp3").unlink(missing_ok=True)  # pre-m4a leftover
     duration = synthesize(units, out_dir / "narration.m4a", voice, speed,
-                          tags, unit_cb if progress else None)
+                          tags, unit_cb if progress else None, bitrate)
     if progress:
-        progress(0.92, "rendering pages")
+        progress(0.96, "rendering pages")
     render_pages(pdf_path, out_dir, dpi)
     if progress:
-        progress(0.97, "building manifest")
+        progress(0.98, "building manifest")
     manifest = build_manifest(pdf_path, units, meta, tags["title"],
                               tags["artist"], duration)
     write_viewer(out_dir, manifest)
@@ -292,7 +363,7 @@ def main():
         server.run(args.library, args.port, voice=args.voice,
                    speed=args.speed, dpi=args.dpi,
                    open_browser=cfg["gui"]["open"] and not args.no_open,
-                   grobid_cfg=grobid_cfg)
+                   grobid_cfg=grobid_cfg, tts_cfg=cfg["tts"])
         return
 
     if args.pdf is None:

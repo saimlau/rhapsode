@@ -2,6 +2,7 @@
 queue on a warm GPU model, and a podcast-style read-along playlist.
 Bound to 127.0.0.1 only. See docs/superpowers/specs/2026-07-12-gui-design.md."""
 
+import asyncio
 import hashlib
 import json
 import os
@@ -35,6 +36,8 @@ class Library:
         self.file = root / "library.json"
         self.lock = threading.RLock()
         self.version = 1
+        self._dirty = False
+        self._last_save = 0.0
         self.data = {"papers": {}, "order": [], "playlists": {},
                      "settings": {"auto_advance": True}}
         if self.file.is_file():
@@ -46,8 +49,27 @@ class Library:
             tmp = self.file.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.data, indent=1))
             os.replace(tmp, self.file)
+            self._dirty = False
+            self._last_save = time.time()
             if bump:
                 self.version += 1
+
+    def touch(self, bump=True):
+        """In-memory mutation happened; persist lazily (30 s debounce).
+        High-frequency writers (progress ticks, playback positions) go
+        through here instead of hammering the SSD with full-registry
+        writes."""
+        with self.lock:
+            self._dirty = True
+            if bump:
+                self.version += 1
+            if time.time() - self._last_save >= 30:
+                self.save(bump=False)
+
+    def flush(self):
+        with self.lock:
+            if self._dirty:
+                self.save(bump=False)
 
     def snapshot(self):
         with self.lock:
@@ -61,10 +83,13 @@ class Library:
                 raise HTTPException(404, f"unknown paper: {pid}")
             return entry
 
-    def update(self, pid, bump=True, **fields):
+    def update(self, pid, bump=True, persist=True, **fields):
         with self.lock:
             self.data["papers"][pid].update(fields)
-            self.save(bump)
+            if persist:
+                self.save(bump)
+            else:
+                self.touch(bump)
 
     def playlist_by_name(self, name):
         """Find-or-create a playlist; the slug id makes repeats idempotent."""
@@ -83,20 +108,35 @@ class Library:
 
 
 class Worker(threading.Thread):
-    """Single generation thread — the GPU is serial; the model stays warm."""
+    """Single generation thread — the GPU is serial; the model stays warm
+    during a batch and is parked/unloaded (with GROBID stopped) when the
+    queue has been idle, so nothing heavy stays resident between bursts."""
 
-    def __init__(self, lib, voice, speed, dpi, grobid_cfg=None):
+    def __init__(self, lib, voice, speed, dpi, grobid_cfg=None, tts_cfg=None):
         super().__init__(daemon=True)
         self.lib, self.voice, self.speed, self.dpi = lib, voice, speed, dpi
         self.grobid_cfg = grobid_cfg
+        self.tts_cfg = tts_cfg or {}
         self.q = queue.Queue()
 
     def enqueue(self, pid):
         self.q.put(pid)
 
+    def _idle_tick(self):
+        p2a.maybe_idle_models(self.tts_cfg.get("park_after_s", 300),
+                              self.tts_cfg.get("unload_after_s", 1800))
+        if self.grobid_cfg:
+            import grobid
+            grobid.maybe_stop(self.grobid_cfg.get("idle_stop_s", 600))
+        self.lib.flush()  # persist any debounced updates while quiet
+
     def run(self):
         while True:
-            pid = self.q.get()
+            try:
+                pid = self.q.get(timeout=60)
+            except queue.Empty:
+                self._idle_tick()
+                continue
             with self.lib.lock:
                 entry = self.lib.data["papers"].get(pid)
                 if entry is None or entry["status"] != "pending":
@@ -108,13 +148,17 @@ class Worker(threading.Thread):
             def progress(frac, _label):
                 if frac - last[0] >= 0.02 or frac >= 1.0:
                     last[0] = frac
-                    self.lib.update(pid, progress=round(frac, 3))
+                    # memory-only: SSE clients see it, disk doesn't —
+                    # ~50 full-registry writes per paper served no one
+                    self.lib.update(pid, persist=False,
+                                    progress=round(frac, 3))
 
             try:
                 info = p2a.generate_readalong(
                     self.lib.pdf_path(pid), self.lib.view_dir(pid),
                     self.voice, self.speed, self.dpi, progress,
-                    grobid_cfg=self.grobid_cfg)
+                    grobid_cfg=self.grobid_cfg,
+                    bitrate=self.tts_cfg.get("m4a_bitrate", "48k"))
                 fields = dict(status="ready", progress=1.0,
                               duration=round(info["duration"], 1),
                               warnings=info["warnings"])
@@ -302,8 +346,22 @@ def create_app(lib, worker):
     @app.post("/api/papers/{pid}/position")
     def position(pid: str, body: dict):
         lib.paper(pid)
-        lib.update(pid, bump=False, resume_t=float(body.get("t", 0)))
+        # in-memory immediately, disk at most every 30 s (worst case on a
+        # crash: the resume point is half a minute stale)
+        lib.update(pid, bump=False, persist=False,
+                   resume_t=float(body.get("t", 0)))
         return {"ok": True}
+
+    @app.get("/api/status")
+    def status_endpoint():
+        import grobid
+        with lib.lock:
+            counts = {}
+            for p in lib.data["papers"].values():
+                counts[p["status"]] = counts.get(p["status"], 0) + 1
+        return {"kokoro": p2a.pipeline_status(),
+                "grobid": grobid.status(),
+                "papers": counts, "queue": worker.q.qsize()}
 
     @app.put("/api/queue")
     def reorder(body: dict):
@@ -324,24 +382,31 @@ def create_app(lib, worker):
             lib.save()
         return {"ok": True}
 
+    payload_cache = {"v": -1, "body": ""}
+
     @app.get("/api/events")
-    def events():
-        def gen():
+    async def events():
+        # async generator: SSE clients cost zero threadpool tokens (the old
+        # sync version pinned one of ~40 pool threads per open tab), and the
+        # serialized snapshot is shared across clients per version
+        async def gen():
             last, idle = 0, 0
             while True:
-                if lib.version != last:
-                    last = lib.version
-                    idle = 0
-                    yield f"data: {json.dumps(lib.snapshot())}\n\n"
+                v = lib.version
+                if v != last:
+                    last, idle = v, 0
+                    if payload_cache["v"] != v:
+                        payload_cache["v"] = v
+                        payload_cache["body"] = json.dumps(lib.snapshot())
+                    yield f"data: {payload_cache['body']}\n\n"
                 elif idle >= 20:
                     idle = 0
                     # heartbeat: without periodic yields a dead client's
-                    # generator is never closed and its thread leaks —
-                    # enough reloads exhaust the pool and wedge the server
+                    # generator is never closed and leaks
                     yield ": ping\n\n"
                 else:
                     idle += 1
-                time.sleep(0.7)
+                await asyncio.sleep(0.7)
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     def _tts(text, rate, voice):
@@ -401,7 +466,8 @@ def _free_port(start):
     raise RuntimeError(f"no free port in {start}..{start + 9}")
 
 
-def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None):
+def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
+        tts_cfg=None):
     root = Path(root)
     if not root.exists() and not root.parent.exists():
         sys.exit(f"error: library location unavailable (is the volume "
@@ -409,19 +475,19 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None):
     root.mkdir(parents=True, exist_ok=True)
 
     lib = Library(root)
-    worker = Worker(lib, voice, speed, dpi, grobid_cfg)
+    worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg)
     with lib.lock:  # crash recovery: re-queue anything left mid-generation
         for pid, entry in lib.data["papers"].items():
             if entry["status"] in ("generating", "pending"):
                 entry["status"] = "pending"
                 worker.enqueue(pid)
-            if entry.get("year") is None:  # migration: entries predating year
-                try:
-                    import fitz
+            if "year" not in entry:  # migration: entries predating year
+                try:                 # (None = already tried; don't re-parse
+                    import fitz      # every year-less PDF on each launch)
                     from extraction import _page_year
                     entry["year"] = _page_year(fitz.open(lib.pdf_path(pid))[0])
                 except Exception:
-                    pass
+                    entry["year"] = None
         lib.save()
     worker.start()
 
@@ -434,5 +500,10 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None):
             stderr=subprocess.DEVNULL)).start()
     # never-ending SSE streams would make graceful shutdown wait forever
     # (Ctrl+C seemingly dead); force-close connections after a short grace
-    uvicorn.run(create_app(lib, worker), host="127.0.0.1", port=port,
-                log_level="warning", timeout_graceful_shutdown=3)
+    try:
+        uvicorn.run(create_app(lib, worker), host="127.0.0.1", port=port,
+                    log_level="warning", timeout_graceful_shutdown=3)
+    finally:
+        import grobid
+        grobid.stop()   # don't orphan a JVM we started
+        lib.flush()     # persist debounced positions/progress

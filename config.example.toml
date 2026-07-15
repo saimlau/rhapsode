@@ -12,6 +12,13 @@ voice = "af_heart"
 # Speech speed multiplier used at synthesis time (the viewer also has a
 # live playback-speed control that doesn't require re-synthesis).
 speed = 1.0
+# Read-along audio bitrate (24 kHz mono speech; 48k AAC is transparent).
+m4a_bitrate = "48k"
+# Idle model lifecycle in the GUI server: park the model to CPU RAM after
+# park_after_s (instant resume), fully unload after unload_after_s (~2 s
+# reload on next use). Frees ~700 MiB VRAM between generation bursts.
+park_after_s = 300
+unload_after_s = 1800
 
 [render]
 # Page image resolution for the read-along view, in DPI.
@@ -33,3 +40,6 @@ url = "http://127.0.0.1:8070"
 # used automatically if present, since GROBID needs Java <= 17).
 autostart = true
 # home = "~/Documents/grobid-0.8.1"
+# Stop a GROBID service we started after this much idle time (its JVM
+# holds 2-4 GB RAM); it restarts automatically on the next paper.
+idle_stop_s = 600

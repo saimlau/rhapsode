@@ -8,11 +8,12 @@ from pathlib import Path
 
 DEFAULTS = {
     "library": {"path": "~/PaperAudio"},
-    "tts": {"voice": "af_heart", "speed": 1.0},
+    "tts": {"voice": "af_heart", "speed": 1.0, "m4a_bitrate": "48k",
+            "park_after_s": 300, "unload_after_s": 1800},
     "render": {"dpi": 150},
     "gui": {"port": 7717, "open": True},
     "grobid": {"enabled": True, "url": "http://127.0.0.1:8070",
-               "autostart": True, "home": None},
+               "autostart": True, "home": None, "idle_stop_s": 600},
 }
 
 

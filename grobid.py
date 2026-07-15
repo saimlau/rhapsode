@@ -18,6 +18,10 @@ import requests
 
 TEI = "{http://www.tei-c.org/ns/1.0}"
 
+_PROC = None       # service Popen when WE started it (dist script only —
+                   # never terminate a GROBID someone else owns)
+_LAST_USED = 0.0   # last extract() completion, for idle shutdown
+
 
 def alive(url, timeout=2):
     try:
@@ -30,6 +34,7 @@ def alive(url, timeout=2):
 def ensure(url, home=None, autostart=True, wait_s=150):
     """True when the service answers, starting the native service from a
     GROBID source install (`home`) if allowed."""
+    global _PROC, _LAST_USED
     if alive(url):
         return True
     if not autostart or not home:
@@ -37,10 +42,16 @@ def ensure(url, home=None, autostart=True, wait_s=150):
     home = Path(home).expanduser()
     dist = (home / "grobid-service/build/install/grobid-service"
                    "/bin/grobid-service")
+    own = False
     if dist.is_file():
+        # the dist start script execs java, so the Popen PID IS the JVM
+        # and terminate() reaches it — safe to own
         cmd = [str(dist), "server",
                str(home / "grobid-home/config/grobid.yaml")]
+        own = True
     elif (home / "gradlew").is_file():
+        # gradle runs the JVM under its daemon; terminating the wrapper
+        # would orphan the service, so don't claim ownership
         cmd = ["./gradlew", "run", "--quiet"]
     else:
         print(f"warning: no GROBID install at {home}")
@@ -51,14 +62,47 @@ def ensure(url, home=None, autostart=True, wait_s=150):
     if (home / "jdk/bin/java").is_file():
         env["JAVA_HOME"] = str(home / "jdk")  # bundled JDK 17 (GROBID
         env["PATH"] = f"{home}/jdk/bin:{env.get('PATH', '')}"  # needs <=17)
-    subprocess.Popen(cmd, cwd=home, env=env,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(cmd, cwd=home, env=env,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    if own:
+        _PROC = proc
     print("starting GROBID service (first start loads models)...")
+    _LAST_USED = time.time()
     for _ in range(wait_s):
         if alive(url):
             return True
         time.sleep(1)
     return False
+
+
+def stop():
+    """Stop the service if — and only if — this process started it."""
+    global _PROC
+    if _PROC is None:
+        return False
+    _PROC.terminate()
+    try:
+        _PROC.wait(timeout=10)  # reap; a half-dead server must not pass
+    except subprocess.TimeoutExpired:  # the next alive() check
+        _PROC.kill()
+        _PROC.wait()
+    _PROC = None
+    return True
+
+
+def maybe_stop(idle_stop_s):
+    """Idle shutdown hook for the server's worker loop."""
+    if _PROC is not None and time.time() - _LAST_USED >= idle_stop_s:
+        if stop():
+            print(f"grobid: stopped after {idle_stop_s}s idle")
+            return True
+    return False
+
+
+def status():
+    return {"owned": _PROC is not None,
+            "idle_s": round(time.time() - _LAST_USED, 1) if _LAST_USED else None}
 
 
 def _coords_to_rects(coords):
@@ -184,6 +228,8 @@ def extract(pdf_path, url, timeout=180):
                                   "para_end": False})
             _sentences(div, units)
 
+    global _LAST_USED
+    _LAST_USED = time.time()
     if sum(len(u["text"]) for u in units) < 500:
         raise ValueError("GROBID returned almost no text")
     recovered = _recover_missing_headings(pdf_path, units)
