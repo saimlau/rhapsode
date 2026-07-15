@@ -136,6 +136,34 @@ body { display: flex; background: var(--desk); font-family: var(--sans);
   background: #B33; color: #fff; padding: 9px 16px; border-radius: 9px;
   font-size: 13px; display: none; z-index: 60;
 }
+
+/* in-page confirm/prompt: window.confirm/prompt are no-ops in Zotero's
+   embedded browser, so the app can't rely on them */
+.modal-ov {
+  position: fixed; inset: 0; background: rgba(20, 18, 14, .45);
+  display: grid; place-items: center; z-index: 100;
+}
+.modal {
+  background: var(--side); color: var(--ink); border-radius: 12px;
+  padding: 20px; width: min(360px, calc(100vw - 32px));
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .35);
+  border: 1px solid var(--hairline);
+}
+.modal p { margin: 0 0 14px; font-size: 14px; line-height: 1.5; }
+.modal input {
+  width: 100%; box-sizing: border-box; margin-bottom: 14px; padding: 8px 10px;
+  border: 1px solid var(--hairline); border-radius: 7px; font: 14px var(--sans);
+  background: var(--desk); color: var(--ink);
+}
+.modal-row { display: flex; justify-content: flex-end; gap: 8px; }
+.modal-row button {
+  border: 0; border-radius: 7px; padding: 8px 16px; cursor: pointer;
+  font: 13px var(--sans); background: rgba(0, 0, 0, .07); color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+  .modal-row button { background: rgba(255, 255, 255, .08); }
+}
+.modal-row button.pri { background: var(--marker); color: #201a05; font-weight: 600; }
 :focus-visible { outline: 2px solid var(--marker); outline-offset: 2px; }
 </style>
 </head>
@@ -174,6 +202,61 @@ let selected = new Set(), lastIdx = null;
 
 const jbody = obj => ({ headers: { "Content-Type": "application/json" },
                         body: JSON.stringify(obj) });
+
+// window.confirm/prompt are no-ops inside Zotero's embedded browser, so
+// these promise-based in-page equivalents replace them everywhere
+function _modal(build) {
+  return new Promise(resolve => {
+    const ov = document.createElement("div");
+    ov.className = "modal-ov";
+    const box = document.createElement("div");
+    box.className = "modal";
+    ov.appendChild(box);
+    const close = v => { ov.remove();
+                         document.removeEventListener("keydown", onKey);
+                         resolve(v); };
+    function onKey(e) {
+      if (e.key === "Escape") close(build.cancel);
+      else if (e.key === "Enter") close(build.enter());
+    }
+    build.render(box, close);
+    ov.addEventListener("pointerdown", e => { if (e.target === ov) close(build.cancel); });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(ov);
+    build.focus && build.focus(box);
+  });
+}
+function askConfirm(message, okLabel = "OK") {
+  return _modal({
+    cancel: false, enter: () => true,
+    render(box, close) {
+      const p = document.createElement("p"); p.textContent = message;
+      const row = document.createElement("div"); row.className = "modal-row";
+      const cancel = document.createElement("button"); cancel.textContent = "Cancel";
+      const ok = document.createElement("button"); ok.textContent = okLabel;
+      ok.className = "pri";
+      cancel.onclick = () => close(false); ok.onclick = () => close(true);
+      row.append(cancel, ok); box.append(p, row);
+    },
+  });
+}
+function askPrompt(message, def = "") {
+  let input;
+  return _modal({
+    cancel: null, enter: () => input.value.trim() || null,
+    render(box, close) {
+      const p = document.createElement("p"); p.textContent = message;
+      input = document.createElement("input"); input.type = "text"; input.value = def;
+      const row = document.createElement("div"); row.className = "modal-row";
+      const cancel = document.createElement("button"); cancel.textContent = "Cancel";
+      const ok = document.createElement("button"); ok.textContent = "OK"; ok.className = "pri";
+      cancel.onclick = () => close(null);
+      ok.onclick = () => close(input.value.trim() || null);
+      row.append(cancel, ok); box.append(p, input, row);
+    },
+    focus(box) { box.querySelector("input").focus(); },
+  });
+}
 function playlists() { return state.playlists || {}; }
 function visibleIds() {
   if (activePl && playlists()[activePl]) {
@@ -216,7 +299,7 @@ addEventListener("pointerdown", e => {
   if (!$("plmenu").contains(e.target)) $("plmenu").style.display = "none";
 });
 async function newPlaylist(thenAdd) {
-  const name = prompt("Playlist name:");
+  const name = await askPrompt("Playlist name:");
   if (!name) return;
   const r = await fetch("/api/playlists", { method: "POST", ...jbody({ name }) });
   const plid = (await r.json()).id;
@@ -323,14 +406,15 @@ addEventListener("message", e => {
 });
 
 // ------------------------------------------------------------- queue UI
-$("queue").addEventListener("click", e => {
+$("queue").addEventListener("click", async e => {
   const row = e.target.closest(".row");
   if (!row) return;
   const id = row.dataset.id, act = e.target.dataset.act;
   if (act === "del") {
     if (activePl) {
       fetch(`/api/playlists/${activePl}/papers/${id}`, { method: "DELETE" });
-    } else if (confirm("Remove this paper (and its audio) from the library?")) {
+    } else if (await askConfirm("Remove this paper (and its audio) from "
+                                + "the library?", "Remove")) {
       fetch(`/api/papers/${id}`, { method: "DELETE" })
         .then(r => { if (!r.ok) r.json().then(j => toast(j.detail));
                      if (id === currentId) { currentId = null; render(); } });
@@ -394,8 +478,9 @@ $("queue").addEventListener("contextmenu", e => {
         selected.clear();
       }});
     } else {
-      items.push({ label: `Remove ${noun} from library…`, action: () => {
-        if (!confirm(`Delete ${noun} (and audio) from the library?`)) return;
+      items.push({ label: `Remove ${noun} from library…`, action: async () => {
+        if (!(await askConfirm(`Delete ${noun} (and audio) from the library?`,
+                               "Delete"))) return;
         for (const id of selected) {
           fetch(`/api/papers/${id}`, { method: "DELETE" });
           if (id === currentId) currentId = null;
@@ -419,7 +504,7 @@ function addToPlaylistMenu(ids, x, y) {
   const items = playlistEntries().map(en => ({
     label: en.label, depth: en.depth, action: () => add(en.plid) }));
   items.push({ label: "＋ New playlist…", action: async () => {
-    const name = prompt("Playlist name:");
+    const name = await askPrompt("Playlist name:");
     if (!name) return;
     const r = await fetch("/api/playlists", { method: "POST", ...jbody({ name }) });
     add((await r.json()).id);
@@ -553,15 +638,15 @@ $("plTitle").onclick = e => {
   items.push({ label: "＋ New playlist…", action: () => newPlaylist(null) });
   if (activePl) {
     items.push({ label: "✕ Delete this playlist", action: async () => {
-      if (confirm("Delete this playlist? Papers stay in the library.")) {
-        const gone = activePl;
-        const r = await fetch(`/api/playlists/${gone}`, { method: "DELETE" });
-        if (!r.ok) { toast("Could not delete playlist"); return; }
-        // prune locally so the change shows even if the SSE snapshot lags;
-        // the next snapshot will confirm the same state
-        delete state.playlists[gone];
-        setActivePl(null);
-      }
+      if (!(await askConfirm("Delete this playlist? Papers stay in the "
+                             + "library.", "Delete"))) return;
+      const gone = activePl;
+      const r = await fetch(`/api/playlists/${gone}`, { method: "DELETE" });
+      if (!r.ok) { toast("Could not delete playlist"); return; }
+      // prune locally so the change shows even if the SSE snapshot lags;
+      // the next snapshot will confirm the same state
+      delete state.playlists[gone];
+      setActivePl(null);
     }});
   }
   showMenu(items, e.clientX, e.clientY);
