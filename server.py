@@ -135,7 +135,10 @@ class Worker(threading.Thread):
             try:
                 pid = self.q.get(timeout=60)
             except queue.Empty:
-                self._idle_tick()
+                try:
+                    self._idle_tick()
+                except Exception as e:  # a failed flush/park must never
+                    print(f"idle tick failed: {e}")  # kill the only worker
                 continue
             with self.lib.lock:
                 entry = self.lib.data["papers"].get(pid)
@@ -170,6 +173,10 @@ class Worker(threading.Thread):
                 self.lib.update(pid, **fields)
             except Exception as e:  # keep the queue alive on any failure
                 self.lib.update(pid, status="error", error=str(e))
+            finally:
+                if self.grobid_cfg:  # generation time isn't GROBID idle time
+                    import grobid
+                    grobid.touch()
 
 
 def create_app(lib, worker):

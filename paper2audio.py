@@ -197,7 +197,10 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
     cmd += ["-f", "mp4" if out_path.suffix in (".m4a", ".mp4") else "mp3",
             str(part)]
 
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    # new session: terminal Ctrl+C must not kill the encoder mid-paper —
+    # the interrupted paper should resume on restart, not be marked error
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            start_new_session=True)
     samples = 0
 
     def push(wave):
@@ -237,6 +240,8 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
         if proc.wait() != 0:
             raise RuntimeError(f"ffmpeg encode failed (rc={proc.returncode})")
         os.replace(part, out_path)
+        with TTS_LOCK:  # a long paper isn't "idle time" for the model
+            _PIPE_STATE["last_used"] = time.time()
     except BrokenPipeError:
         proc.wait()
         raise RuntimeError(f"ffmpeg died during encode (rc={proc.returncode})")
@@ -401,7 +406,8 @@ def main():
             try:
                 info = generate_readalong(args.pdf, out_dir, args.voice,
                                           args.speed, args.dpi,
-                                          grobid_cfg=grobid_cfg)
+                                          grobid_cfg=grobid_cfg,
+                                          bitrate=cfg["tts"]["m4a_bitrate"])
             except ValueError as e:
                 sys.exit(f"error: {e}")
             for w in info["warnings"]:

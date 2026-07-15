@@ -62,11 +62,18 @@ def ensure(url, home=None, autostart=True, wait_s=150):
     if (home / "jdk/bin/java").is_file():
         env["JAVA_HOME"] = str(home / "jdk")  # bundled JDK 17 (GROBID
         env["PATH"] = f"{home}/jdk/bin:{env.get('PATH', '')}"  # needs <=17)
-    proc = subprocess.Popen(cmd, cwd=home, env=env,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
-    if own:
-        _PROC = proc
+    if _PROC is not None and _PROC.poll() is None:
+        # our own instance is still starting up — don't spawn a second
+        # (which would orphan the first from idle-stop/shutdown)
+        pass
+    else:
+        proc = subprocess.Popen(cmd, cwd=home, env=env,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        if own:
+            _PROC = proc
+            import atexit  # CLI one-shots must not leave a 2-4 GB JVM behind
+            atexit.register(stop)
     print("starting GROBID service (first start loads models)...")
     _LAST_USED = time.time()
     for _ in range(wait_s):
@@ -89,6 +96,14 @@ def stop():
         _PROC.wait()
     _PROC = None
     return True
+
+
+def touch():
+    """The caller just finished paper work — reset the idle clock (the
+    worker can't tick during a long synthesis, so extract-time anchoring
+    would count synthesis as idle)."""
+    global _LAST_USED
+    _LAST_USED = time.time()
 
 
 def maybe_stop(idle_stop_s):
