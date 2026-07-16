@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a two-column academic paper PDF into a narrated MP3.
+"""Rhapsode — turn academic paper PDFs into narrated read-along audio.
 
 Extracts title, abstract, and body text in reading order (PyMuPDF),
 skips affiliations / page furniture / figure captions / References,
@@ -102,8 +102,8 @@ def prepare_units(pdf_path, grobid_cfg=None):
 
 def make_tags(pdf_path, meta):
     title = clean_text(meta["title"] or "") or pdf_path.stem
-    artist = (f"{meta['authors']} (audio by paper2audio)" if meta["authors"]
-              else "audio by paper2audio")
+    artist = (f"{meta['authors']} (audio by Rhapsode)" if meta["authors"]
+              else "audio by Rhapsode")
     return {"title": title, "artist": artist}
 
 

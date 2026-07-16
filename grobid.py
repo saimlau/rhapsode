@@ -1,4 +1,4 @@
-"""GROBID extraction backend for paper2audio.
+"""GROBID extraction backend for Rhapsode.
 
 GROBID (https://github.com/kermitt2/grobid) is the standard ML pipeline
 for scholarly-PDF structure. It runs as a local HTTP service (Docker,

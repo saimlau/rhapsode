@@ -1,18 +1,21 @@
-# paper2audio
+# Rhapsode
 
-Turn a two-column academic paper PDF into a narrated MP3, fully locally.
+**R**ead-along **H**ighlighted **A**udio for **P**aper**S** **O**n-**D**evice **E**ngine —
+turn academic paper PDFs into narrated, synchronized read-along audio,
+fully locally. (A *rhapsode* was the ancient Greek performer who recited
+scholarly texts aloud.)
 Extraction with PyMuPDF, speech with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
 on CUDA (falls back to CPU).
 
 ## Usage
 
 ```bash
-./paper2audio "paper.pdf"                 # writes paper.mp3 next to the PDF
-./paper2audio "paper.pdf" --play          # browser read-along view (see below)
-./paper2audio --gui                       # library web app (see below)
-./paper2audio "paper.pdf" -o out.mp3      # explicit output path
-./paper2audio "paper.pdf" --text-only    # inspect what will be read
-./paper2audio "paper.pdf" --voice af_heart --speed 1.1
+./rhapsode "paper.pdf"                 # writes paper.mp3 next to the PDF
+./rhapsode "paper.pdf" --play          # browser read-along view (see below)
+./rhapsode --gui                       # library web app (see below)
+./rhapsode "paper.pdf" -o out.mp3      # explicit output path
+./rhapsode "paper.pdf" --text-only    # inspect what will be read
+./rhapsode "paper.pdf" --voice af_heart --speed 1.1
 ```
 
 ## Library GUI
@@ -35,9 +38,9 @@ active playlist.
 
 ## Zotero plugin
 
-`zotero-plugin/` adds "Listen with paper2audio" to Zotero's item context
+`zotero-plugin/` adds "Listen with Rhapsode" to Zotero's item context
 menu (PDF → local server, read-along in a Zotero tab, server auto-started)
-and "Listen to collection with paper2audio" to the collection menu: every
+and "Listen to collection with Rhapsode" to the collection menu: every
 PDF in the collection becomes part of a playlist named after it, with
 subcollections as their own "Parent / Child" playlists. Install
 for development with `zotero-plugin/dev-install.sh` while Zotero is
@@ -70,7 +73,7 @@ page headers/footers, figure/table captions, citation brackets like
 `[12]`, and everything from the References heading onward.
 
 The MP3 is ID3-tagged with the paper title (`title`) and the author
-list plus "(audio by paper2audio)" (`artist`), so it shows up properly
+list plus "(audio by Rhapsode)" (`artist`), so it shows up properly
 in podcast/music players.
 
 ## Setup (already done on this machine)
@@ -100,12 +103,12 @@ highlighting works identically on both backends.
   Springer layouts but are ratio-based, so other publishers should mostly
   work — always spot-check a new layout with `--text-only` first.
 - Scanned/image-only PDFs are rejected (no OCR).
-- Design spec: `docs/superpowers/specs/2026-07-12-paper2audio-design.md`.
+- Design spec: `docs/superpowers/specs/2026-07-12-Rhapsode-design.md`.
 
 ## Kokoro as a system voice (Speech Dispatcher)
 
 `speechd/install-speechd-voice.sh` registers Kokoro as a user-level
 Speech Dispatcher voice (no root): it appears in Zotero's built-in
 read-aloud voice list and any other speechd-aware app. Requires the
-paper2audio server to be running; test with
+Rhapsode server to be running; test with
 `spd-say -o kokoro 'Hello from Kokoro'`.

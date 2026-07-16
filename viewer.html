@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>paper2audio</title>
+<title>Rhapsode</title>
 <style>
 :root {
   --desk: #ECEAE6;
@@ -175,13 +175,13 @@ button.ctl svg { width: 16px; height: 16px; fill: currentColor; }
 "use strict";
 const DATA = /*__PAPER_DATA__*/null;
 if (!DATA) document.body.innerHTML = "<p style='font:15px system-ui;padding:40px'>" +
-  "No paper data. Generate this view with: paper2audio &lt;paper.pdf&gt; --readalong</p>";
+  "No paper data. Generate this view with: rhapsode &lt;paper.pdf&gt; --readalong</p>";
 
 const $ = id => document.getElementById(id);
 const audio = $("audio");
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const store = JSON.parse(localStorage.getItem("paper2audio.viewer") || "{}");
-const save = () => localStorage.setItem("paper2audio.viewer", JSON.stringify(store));
+const store = JSON.parse(localStorage.getItem("rhapsode.viewer") || localStorage.getItem("paper2audio.viewer") || "{}");
+const save = () => localStorage.setItem("rhapsode.viewer", JSON.stringify(store));
 
 let units = [], sections = [], active = -1, follow = true, progScroll = 0;
 
@@ -451,7 +451,7 @@ function init() {
   // ---- library bridge: only active when embedded by the library app
   const params = new URLSearchParams(location.search);
   if (params.get("embed") === "1" && window.parent !== window) {
-    const post = msg => parent.postMessage({ source: "paper2audio", ...msg }, "*");
+    const post = msg => parent.postMessage({ source: "rhapsode", ...msg }, "*");
     audio.addEventListener("ended", () => post({ type: "ended" }));
     audio.addEventListener("pause", () =>
       post({ type: "position", t: audio.currentTime }));

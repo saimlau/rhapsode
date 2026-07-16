@@ -1,4 +1,1 @@
-#!/usr/bin/env bash
-# Run paper2audio without activating the venv.
-exec "$(dirname "$(readlink -f "$0")")/.venv/bin/python" \
-     "$(dirname "$(readlink -f "$0")")/paper2audio.py" "$@"
+rhapsode

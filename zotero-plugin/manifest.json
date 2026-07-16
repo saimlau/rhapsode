@@ -1,13 +1,13 @@
 {
   "manifest_version": 2,
-  "name": "paper2audio for Zotero",
-  "version": "0.2.3",
-  "description": "Listen to papers with synced read-along highlighting, narrated locally by Kokoro TTS",
+  "name": "Rhapsode for Zotero",
+  "version": "0.3.0",
+  "description": "Listen to papers with synced read-along highlighting — Rhapsode, local Kokoro TTS",
   "author": "saimai",
   "applications": {
     "zotero": {
-      "id": "paper2audio@saimai.lau",
-      "update_url": "https://raw.githubusercontent.com/saimai/paper2audio/main/zotero-plugin/updates.json",
+      "id": "rhapsode@saimai.lau",
+      "update_url": "https://raw.githubusercontent.com/saimai/rhapsode/main/zotero-plugin/updates.json",
       "strict_min_version": "7.0",
       "strict_max_version": "999.*"
     }

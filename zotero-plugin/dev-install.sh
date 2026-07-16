@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Dev-install the paper2audio Zotero plugin into the local Zotero profile.
+# Dev-install the Rhapsode Zotero plugin into the local Zotero profile.
 # Run while Zotero is CLOSED; then start Zotero normally.
 set -euo pipefail
 
@@ -18,11 +18,11 @@ if [ -z "$PROFILE" ]; then
 fi
 
 mkdir -p "$PROFILE/extensions"
-printf '%s' "$PLUGIN_DIR" > "$PROFILE/extensions/paper2audio@saimai.lau"
+printf '%s' "$PLUGIN_DIR" > "$PROFILE/extensions/rhapsode@saimai.lau"
 
 # Force Zotero to rescan extensions on next launch
 sed -i '/extensions.lastAppBuildId/d;/extensions.lastAppVersion/d' \
   "$PROFILE/prefs.js"
 
-echo "Installed proxy: $PROFILE/extensions/paper2audio@saimai.lau -> $PLUGIN_DIR"
-echo "Start Zotero, then right-click a paper: 'Listen with paper2audio'."
+echo "Installed proxy: $PROFILE/extensions/rhapsode@saimai.lau -> $PLUGIN_DIR"
+echo "Start Zotero, then right-click a paper: 'Listen with Rhapsode'."

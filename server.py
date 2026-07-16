@@ -1,4 +1,4 @@
-"""Local library web app for paper2audio: drag-drop PDFs, a generation
+"""Local library web app for Rhapsode: drag-drop PDFs, a generation
 queue on a warm GPU model, and a podcast-style read-along playlist.
 Bound to 127.0.0.1 only. See docs/superpowers/specs/2026-07-12-gui-design.md."""
 
@@ -21,7 +21,7 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
 
-import paper2audio as p2a
+import rhapsode as p2a
 from extraction import clean_text, extract_segments
 
 MAX_UPLOAD = 100 * 1024 * 1024
@@ -180,7 +180,7 @@ class Worker(threading.Thread):
 
 
 def create_app(lib, worker):
-    app = FastAPI(title="paper2audio")
+    app = FastAPI(title="Rhapsode")
 
     @app.get("/", response_class=HTMLResponse)
     def home():
@@ -500,7 +500,7 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
 
     port = _free_port(port)
     url = f"http://127.0.0.1:{port}"
-    print(f"paper2audio library: {url}  (Ctrl+C to stop)")
+    print(f"Rhapsode library: {url}  (Ctrl+C to stop)")
     if open_browser:
         threading.Timer(1.0, lambda: subprocess.Popen(
             ["xdg-open", url], stdout=subprocess.DEVNULL,

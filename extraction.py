@@ -1,4 +1,4 @@
-"""Coordinate-preserving text extraction for paper2audio.
+"""Coordinate-preserving text extraction for Rhapsode.
 
 MappedText pairs a string with per-character (page, bbox) metadata so the
 cleaning regexes keep text and PDF coordinates aligned. After cleaning,

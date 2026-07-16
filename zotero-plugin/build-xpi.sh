@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build dist/paper2audio.xpi for Zotero's "Install Plugin From File".
+# Build dist/rhapsode.xpi for Zotero's "Install Plugin From File".
 # Bakes this machine's repo path into prefs.js so server autostart works
 # even though packed plugins can't derive their location on disk.
 set -euo pipefail
@@ -10,11 +10,11 @@ DIST="$PLUGIN_DIR/dist"
 mkdir -p "$DIST"
 
 cat > "$PLUGIN_DIR/prefs.js" <<EOF
-pref("extensions.paper2audio.repo", "$REPO");
-pref("extensions.paper2audio.port", 7717);
+pref("extensions.rhapsode.repo", "$REPO");
+pref("extensions.rhapsode.port", 7717);
 EOF
 
-rm -f "$DIST/paper2audio.xpi"
-(cd "$PLUGIN_DIR" && zip -q "$DIST/paper2audio.xpi" \
+rm -f "$DIST/rhapsode.xpi"
+(cd "$PLUGIN_DIR" && zip -q "$DIST/rhapsode.xpi" \
   manifest.json bootstrap.js prefs.js)
-echo "Built: $DIST/paper2audio.xpi"
+echo "Built: $DIST/rhapsode.xpi"

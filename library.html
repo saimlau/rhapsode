@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>paper2audio library</title>
+<title>Rhapsode library</title>
 <style>
 :root {
   --desk: #ECEAE6;
@@ -170,7 +170,7 @@ body { display: flex; background: var(--desk); font-family: var(--sans);
 <body>
 <div id="main">
   <div id="empty"><div>
-    <div class="big">paper2audio</div><br>
+    <div class="big">Rhapsode</div><br>
     Drop a PDF anywhere to add it to the library.<br>
     Pick a paper from the queue to start listening.
   </div></div>
@@ -197,7 +197,7 @@ body { display: flex; background: var(--desk); font-family: var(--sans);
 const $ = id => document.getElementById(id);
 let state = { papers: {}, order: [], playlists: {}, settings: {} };
 let currentId = null, dragId = null, dragAt = 0;
-let activePl = localStorage.getItem("paper2audio.activePl") || null;
+let activePl = localStorage.getItem("rhapsode.activePl") || localStorage.getItem("paper2audio.activePl") || null;
 let selected = new Set(), lastIdx = null;
 
 const jbody = obj => ({ headers: { "Content-Type": "application/json" },
@@ -268,8 +268,8 @@ function setActivePl(plid) {
   selected.clear();
   lastIdx = null;
   activePl = plid && playlists()[plid] ? plid : null;
-  if (activePl) localStorage.setItem("paper2audio.activePl", activePl);
-  else localStorage.removeItem("paper2audio.activePl");
+  if (activePl) localStorage.setItem("rhapsode.activePl", activePl);
+  else localStorage.removeItem("rhapsode.activePl");
   render();
 }
 function showMenu(items, x, y) {
@@ -387,7 +387,7 @@ function nextReady(afterId) {
 }
 addEventListener("message", e => {
   const m = e.data;
-  if (!m || m.source !== "paper2audio") return;
+  if (!m || (m.source !== "rhapsode" && m.source !== "paper2audio")) return;
   if (m.type === "drag") { dragPing(); return; }
   if (m.type === "drop") { acceptFiles(m.files || []); return; }
   if (!currentId) return;
@@ -660,14 +660,14 @@ function apply(snap) {
     // a playlist id left in localStorage from an old session (or deleted
     // in another tab) — drop it so its stale "Delete" option can't 404
     activePl = null;
-    localStorage.removeItem("paper2audio.activePl");
+    localStorage.removeItem("rhapsode.activePl");
   }
   if (pendingPl) {  // deep link: playlist by id or name
     const byName = Object.keys(playlists()).find(k =>
       k === pendingPl ||
       playlists()[k].name.toLowerCase() === pendingPl.toLowerCase());
     if (byName) { activePl = byName;
-                  localStorage.setItem("paper2audio.activePl", byName); }
+                  localStorage.setItem("rhapsode.activePl", byName); }
     pendingPl = null;
   }
   if (pendingPlay && state.papers[pendingPlay]?.status === "ready") {

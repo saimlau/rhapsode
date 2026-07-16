@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Register Kokoro (via paper2audio) as a user-level Speech Dispatcher voice.
+# Register Kokoro (via Rhapsode) as a user-level Speech Dispatcher voice.
 # No root needed; config goes to ~/.config/speech-dispatcher/.
 set -euo pipefail
 
@@ -32,5 +32,5 @@ add_module kokoro sd_generic kokoro.conf
 pkill -x speech-dispatch 2>/dev/null || pkill -x speech-dispatcher 2>/dev/null || true
 
 echo "Kokoro registered with Speech Dispatcher."
-echo "The paper2audio server must be running (paper2audio --gui)."
+echo "The Rhapsode server must be running (rhapsode --gui)."
 echo "Test with:  spd-say -o kokoro 'Hello from Kokoro'"

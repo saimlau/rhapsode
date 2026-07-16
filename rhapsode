@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Run Rhapsode without activating the venv.
+exec "$(dirname "$(readlink -f "$0")")/.venv/bin/python" \
+     "$(dirname "$(readlink -f "$0")")/rhapsode.py" "$@"

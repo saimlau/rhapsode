@@ -1,4 +1,4 @@
-"""config.toml loading for paper2audio.
+"""config.toml loading for Rhapsode.
 
 Precedence: CLI flags > config.toml (repo root, gitignored) > DEFAULTS.
 """

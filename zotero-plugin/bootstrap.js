@@ -1,5 +1,5 @@
-/* paper2audio for Zotero — thin shell around the local paper2audio server.
- * Adds "Listen with paper2audio" to the item context menu; the read-along
+/* Rhapsode for Zotero — thin shell around the local Rhapsode server.
+ * Adds "Listen with Rhapsode" to the item context menu; the read-along
  * web app runs inside a Zotero tab via an embedded browser element. */
 "use strict";
 
@@ -7,12 +7,13 @@ var rootURI;
 var tabByWindow = new Map(); // main window -> { tabID, browser }
 
 function log(msg) {
-  Zotero.debug("[paper2audio] " + msg);
+  Zotero.debug("[rhapsode] " + msg);
 }
 
 function getPort() {
   try {
-    const p = Zotero.Prefs.get("extensions.paper2audio.port", true);
+    const p = Zotero.Prefs.get("extensions.rhapsode.port", true)
+          || Zotero.Prefs.get("extensions.paper2audio.port", true);
     if (p) return parseInt(p, 10);
   } catch (e) {}
   return 7717;
@@ -24,7 +25,7 @@ function base() {
 
 function repoPath() {
   // The plugin lives at <repo>/zotero-plugin/, so the repo (and the
-  // `paper2audio` launcher) is rootURI's parent when dev-installed.
+  // `rhapsode` launcher) is rootURI's parent when dev-installed.
   try {
     const uri = Services.io.newURI(rootURI);
     if (uri.schemeIs("file")) {
@@ -32,7 +33,8 @@ function repoPath() {
     }
   } catch (e) {}
   try {
-    return Zotero.Prefs.get("extensions.paper2audio.repo", true) || null;
+    return Zotero.Prefs.get("extensions.rhapsode.repo", true)
+           || Zotero.Prefs.get("extensions.paper2audio.repo", true) || null;
   } catch (e) {
     return null;
   }
@@ -51,22 +53,22 @@ async function ensureServer() {
   if (await serverAlive()) return;
   const repo = repoPath();
   if (!repo) {
-    throw new Error("paper2audio server is not running, and the repo path "
-      + "is unknown (set extensions.paper2audio.repo in the config editor)");
+    throw new Error("Rhapsode server is not running, and the repo path "
+      + "is unknown (set extensions.rhapsode.repo in the config editor)");
   }
   log("starting server from " + repo);
   const { Subprocess } =
     ChromeUtils.importESModule("resource://gre/modules/Subprocess.sys.mjs");
   await Subprocess.call({
-    command: repo + "/paper2audio",
+    command: repo + "/rhapsode",
     arguments: ["--gui", "--no-open"],
   });
   for (let i = 0; i < 30; i++) {
     await Zotero.Promise.delay(500);
     if (await serverAlive()) return;
   }
-  throw new Error("paper2audio server did not come up (tried "
-    + repo + "/paper2audio --gui --no-open)");
+  throw new Error("Rhapsode server did not come up (tried "
+    + repo + "/rhapsode --gui --no-open)");
 }
 
 function itemMeta(item) {
@@ -193,8 +195,8 @@ function openTab(win, url) {
     if (!t.data) t.data = {};
   }
   const { id, container } = win.Zotero_Tabs.add({
-    type: "paper2audio",
-    title: "paper2audio",
+    type: "rhapsode",
+    title: "Rhapsode",
     data: {},  // Zotero 9's tab bar reads tab.data.icon; must not be undefined
     select: true,
     onClose: () => tabByWindow.delete(win),
@@ -243,7 +245,7 @@ function _addMenuItem(win, menuId, itemId, label, handler) {
   item.addEventListener("command", () => {
     handler(win).catch(err => {
       log("error: " + err);
-      Services.prompt.alert(win, "paper2audio", String(err.message || err));
+      Services.prompt.alert(win, "Rhapsode", String(err.message || err));
     });
   });
   menu.appendChild(sep);
@@ -251,15 +253,15 @@ function _addMenuItem(win, menuId, itemId, label, handler) {
 }
 
 function onMainWindowLoad({ window: win }) {
-  _addMenuItem(win, "zotero-itemmenu", "paper2audio-menuitem",
-               "Listen with paper2audio", listen);
-  _addMenuItem(win, "zotero-collectionmenu", "paper2audio-colmenuitem",
-               "Listen to collection with paper2audio", listenCollection);
+  _addMenuItem(win, "zotero-itemmenu", "rhapsode-menuitem",
+               "Listen with Rhapsode", listen);
+  _addMenuItem(win, "zotero-collectionmenu", "rhapsode-colmenuitem",
+               "Listen to collection with Rhapsode", listenCollection);
 }
 
 function onMainWindowUnload({ window: win }) {
-  for (const id of ["paper2audio-menuitem", "paper2audio-menuitem-sep",
-                    "paper2audio-colmenuitem", "paper2audio-colmenuitem-sep"]) {
+  for (const id of ["rhapsode-menuitem", "rhapsode-menuitem-sep",
+                    "rhapsode-colmenuitem", "rhapsode-colmenuitem-sep"]) {
     win.document.getElementById(id)?.remove();
   }
   tabByWindow.delete(win);

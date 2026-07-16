@@ -4,8 +4,8 @@
 # $2 = voice id (from AddVoice in kokoro.conf).
 RATE_RAW="${1:-0}"
 VOICE="${2:-af_heart}"
-PORT="${PAPER2AUDIO_PORT:-7717}"
-PLAYER="${PAPER2AUDIO_PLAYER:-aplay -q}"
+PORT="${RHAPSODE_PORT:-${PAPER2AUDIO_PORT:-7717}}"
+PLAYER="${RHAPSODE_PLAYER:-${PAPER2AUDIO_PLAYER:-aplay -q}}"
 
 # speechd rate -100..100 -> speed 0.5..2.0 (exponential feels linear)
 SPEED=$(awk "BEGIN { printf \"%.2f\", 2 ^ ($RATE_RAW / 100) }")
