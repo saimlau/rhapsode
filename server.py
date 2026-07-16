@@ -112,11 +112,14 @@ class Worker(threading.Thread):
     during a batch and is parked/unloaded (with GROBID stopped) when the
     queue has been idle, so nothing heavy stays resident between bursts."""
 
-    def __init__(self, lib, voice, speed, dpi, grobid_cfg=None, tts_cfg=None):
+    def __init__(self, lib, voice, speed, dpi, grobid_cfg=None, tts_cfg=None,
+                 idle_exit_min=0):
         super().__init__(daemon=True)
         self.lib, self.voice, self.speed, self.dpi = lib, voice, speed, dpi
         self.grobid_cfg = grobid_cfg
         self.tts_cfg = tts_cfg or {}
+        self.idle_exit_min = idle_exit_min or 0
+        self.last_activity = time.time()
         self.q = queue.Queue()
 
     def enqueue(self, pid):
@@ -129,6 +132,15 @@ class Worker(threading.Thread):
             import grobid
             grobid.maybe_stop(self.grobid_cfg.get("idle_stop_s", 600))
         self.lib.flush()  # persist any debounced updates while quiet
+        if (self.idle_exit_min and self.q.empty()
+                and time.time() - self.last_activity
+                    >= self.idle_exit_min * 60):
+            # nothing has touched the server (SSE heartbeats excluded) —
+            # exit cleanly; SIGINT lets uvicorn shut down gracefully and
+            # the run() finally-block stop GROBID and flush the registry
+            print(f"idle for {self.idle_exit_min} min — shutting down")
+            import signal
+            os.kill(os.getpid(), signal.SIGINT)
 
     def run(self):
         while True:
@@ -180,6 +192,14 @@ class Worker(threading.Thread):
 
 def create_app(lib, worker):
     app = FastAPI(title="Rhapsode")
+
+    @app.middleware("http")
+    async def _touch_activity(request, call_next):
+        # every real request counts as activity for idle-exit — except the
+        # long-lived SSE stream, whose heartbeats would keep us alive forever
+        if not request.url.path.startswith("/api/events"):
+            worker.last_activity = time.time()
+        return await call_next(request)
 
     @app.get("/", response_class=HTMLResponse)
     def home():
@@ -473,7 +493,7 @@ def _free_port(start):
 
 
 def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
-        tts_cfg=None):
+        tts_cfg=None, idle_exit_min=0):
     root = Path(root)
     if not root.exists() and not root.parent.exists():
         sys.exit(f"error: library location unavailable (is the volume "
@@ -481,7 +501,7 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     root.mkdir(parents=True, exist_ok=True)
 
     lib = Library(root)
-    worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg)
+    worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg, idle_exit_min)
     with lib.lock:  # crash recovery: re-queue anything left mid-generation
         for pid, entry in lib.data["papers"].items():
             if entry["status"] in ("generating", "pending"):

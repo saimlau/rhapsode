@@ -424,7 +424,8 @@ def main():
         server.run(args.library, args.port, voice=args.voice,
                    speed=args.speed, dpi=args.dpi,
                    open_browser=cfg["gui"]["open"] and not args.no_open,
-                   grobid_cfg=grobid_cfg, tts_cfg=cfg["tts"])
+                   grobid_cfg=grobid_cfg, tts_cfg=cfg["tts"],
+                   idle_exit_min=cfg["gui"].get("idle_exit_min", 0))
         return
 
     if args.pdf is None:

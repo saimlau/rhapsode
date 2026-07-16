@@ -36,6 +36,10 @@ dpi = 150
 port = 7717
 # Open a browser tab when the server starts (set false if you keep a tab).
 open = true
+# Exit the server after this many minutes with no real activity (0 = never).
+# Uploads, playback, and page loads count; idle background tabs don't.
+# Pairs with packaging/rhapsode.service for start-on-demand.
+idle_exit_min = 0
 
 [grobid]
 # GROBID (scholarly-PDF structure ML) as the primary extractor; the

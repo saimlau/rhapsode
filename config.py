@@ -13,7 +13,7 @@ DEFAULTS = {
             "backend": "local", "modal_endpoint": "",
             "modal_token_id": "", "modal_token_secret": ""},
     "render": {"dpi": 150},
-    "gui": {"port": 7717, "open": True},
+    "gui": {"port": 7717, "open": True, "idle_exit_min": 0},
     "grobid": {"enabled": True, "url": "http://127.0.0.1:8070",
                "autostart": True, "home": None, "idle_stop_s": 600},
 }

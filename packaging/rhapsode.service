@@ -1,0 +1,19 @@
+# Rhapsode as a systemd user service.
+#   cp packaging/rhapsode.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user start rhapsode      # or enable for login autostart
+# Pairs well with [gui] idle_exit_min in config.toml: the server exits
+# when unused and you (or the Zotero plugin) start it again on demand.
+[Unit]
+Description=Rhapsode — read-along audio for research papers
+
+[Service]
+Type=exec
+WorkingDirectory=%h/Documents/rhapsode
+ExecStart=%h/Documents/rhapsode/rhapsode --gui --no-open
+# clean exit on idle_exit_min is a normal stop, not a failure
+SuccessExitStatus=0
+Restart=no
+
+[Install]
+WantedBy=default.target
