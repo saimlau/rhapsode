@@ -118,16 +118,30 @@ def get_pipeline():
         if _PIPELINE is None:
             import torch
             from kokoro import KPipeline
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            mps = (getattr(torch.backends, "mps", None) is not None
+                   and torch.backends.mps.is_available())
+            device = ("cuda" if torch.cuda.is_available()
+                      else "mps" if mps else "cpu")
             if device == "cpu":
-                print("warning: CUDA not available, synthesizing on CPU (slower)")
-            _PIPELINE = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M",
-                                  device=device)
+                print("warning: no GPU available, synthesizing on CPU (slower)")
+            try:
+                _PIPELINE = KPipeline(lang_code="a",
+                                      repo_id="hexgrad/Kokoro-82M",
+                                      device=device)
+            except Exception:
+                if device != "mps":
+                    raise
+                print("warning: MPS backend failed, falling back to CPU")
+                device = "cpu"
+                _PIPELINE = KPipeline(lang_code="a",
+                                      repo_id="hexgrad/Kokoro-82M",
+                                      device="cpu")
+            _PIPE_STATE["device"] = device
             _PIPE_STATE["parked"] = False
         elif _PIPE_STATE["parked"]:
-            import torch
-            if torch.cuda.is_available():
-                _PIPELINE.model.to("cuda")
+            dev = _PIPE_STATE.get("device", "cpu")
+            if dev != "cpu":
+                _PIPELINE.model.to(dev)
             _PIPE_STATE["parked"] = False
         _PIPE_STATE["last_used"] = time.time()
         return _PIPELINE
@@ -144,18 +158,25 @@ def maybe_idle_models(park_after_s, unload_after_s):
             return "unloaded"
         import torch
         idle = time.time() - _PIPE_STATE["last_used"]
+        def _free_cache():
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif _PIPE_STATE.get("device") == "mps":
+                try:
+                    torch.mps.empty_cache()
+                except Exception:
+                    pass
         if idle >= unload_after_s:
             _PIPELINE = None
             _PIPE_STATE["parked"] = False
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            _free_cache()
             print(f"kokoro: unloaded after {idle:.0f}s idle")
             return "unloaded"
         if idle >= park_after_s and not _PIPE_STATE["parked"]:
-            if torch.cuda.is_available():
+            if _PIPE_STATE.get("device", "cpu") != "cpu":
                 _PIPELINE.model.to("cpu")
-                torch.cuda.empty_cache()
+                _free_cache()
             _PIPE_STATE["parked"] = True
             print(f"kokoro: parked to CPU after {idle:.0f}s idle")
         return "parked" if _PIPE_STATE["parked"] else "loaded"
@@ -257,10 +278,11 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
     cmd += ["-f", "mp4" if out_path.suffix in (".m4a", ".mp4") else "mp3",
             str(part)]
 
-    # new session: terminal Ctrl+C must not kill the encoder mid-paper —
-    # the interrupted paper should resume on restart, not be marked error
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                            start_new_session=True)
+    # detach the encoder from terminal signals: Ctrl+C must not kill
+    # ffmpeg mid-paper — the interrupted paper should resume on restart
+    detach = (dict(start_new_session=True) if os.name == "posix"
+              else dict(creationflags=subprocess.CREATE_NEW_PROCESS_GROUP))
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, **detach)
     samples = 0
 
     def push(wave):
@@ -471,8 +493,8 @@ def main():
                 print(f"warning: {w}")
             print(f"read-along view: {out_dir}")
         if args.play:
-            subprocess.Popen(["xdg-open", str(index)],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            import webbrowser
+            webbrowser.open(index.as_uri())
             print(f"opened {index}")
         return
 

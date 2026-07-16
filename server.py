@@ -146,7 +146,7 @@ class Worker(threading.Thread):
             # the run() finally-block stop GROBID and flush the registry
             print(f"idle for {self.idle_exit_min} min — shutting down")
             import signal
-            os.kill(os.getpid(), signal.SIGINT)
+            signal.raise_signal(signal.SIGINT)  # cross-platform SIGINT
 
     def run(self):
         while True:
@@ -538,9 +538,8 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     url = f"http://127.0.0.1:{port}"
     print(f"Rhapsode library: {url}  (Ctrl+C to stop)")
     if open_browser:
-        threading.Timer(1.0, lambda: subprocess.Popen(
-            ["xdg-open", url], stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL)).start()
+        import webbrowser
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     # never-ending SSE streams would make graceful shutdown wait forever
     # (Ctrl+C seemingly dead); force-close connections after a short grace
     try:

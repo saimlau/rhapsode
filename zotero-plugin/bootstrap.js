@@ -60,7 +60,7 @@ async function ensureServer() {
   const { Subprocess } =
     ChromeUtils.importESModule("resource://gre/modules/Subprocess.sys.mjs");
   await Subprocess.call({
-    command: repo + "/rhapsode",
+    command: repo + (Zotero.isWin ? "\\rhapsode.bat" : "/rhapsode"),
     arguments: ["--gui", "--no-open"],
   });
   for (let i = 0; i < 30; i++) {

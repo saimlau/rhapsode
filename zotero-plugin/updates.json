@@ -3,8 +3,8 @@
     "rhapsode@saimai.lau": {
       "updates": [
         {
-          "version": "0.3.0",
-          "update_link": "https://github.com/saimlau/rhapsode/releases/download/v0.3.0/rhapsode.xpi",
+          "version": "0.3.1",
+          "update_link": "https://github.com/saimlau/rhapsode/releases/download/v0.3.1/rhapsode.xpi",
           "applications": { "zotero": { "strict_min_version": "7.0" } }
         }
       ]

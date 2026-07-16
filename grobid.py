@@ -39,6 +39,11 @@ def ensure(url, home=None, autostart=True, wait_s=150):
         return True
     if not autostart or not home:
         return False
+    if os.name != "posix":
+        print("warning: GROBID autostart isn't supported on Windows (no "
+              "native GROBID build) — run it in WSL/Docker and set "
+              "[grobid] url, or extraction falls back to built-in heuristics")
+        return False
     home = Path(home).expanduser()
     dist = (home / "grobid-service/build/install/grobid-service"
                    "/bin/grobid-service")

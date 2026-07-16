@@ -78,6 +78,14 @@ The MP3 is ID3-tagged with the paper title (`title`) and the author
 list plus "(audio by Rhapsode)" (`artist`), so it shows up properly
 in podcast/music players.
 
+## 💻 Platform support
+
+| Platform | Status |
+|---|---|
+| Linux | First-class — developed and tested here. All features incl. GROBID autostart, speechd system voice, systemd unit. |
+| macOS | Expected to work (experimental, testers welcome): CPU or Apple-Silicon MPS synthesis, native GROBID. The speechd voice and systemd unit don't apply. |
+| Windows | Core pipeline expected to work via `rhapsode.bat` (experimental, testers welcome). GROBID has no native Windows build — extraction automatically falls back to built-in heuristics, or run GROBID in WSL/Docker and set `[grobid] url`. |
+
 ## 🛠️ Setup
 
 ```bash
