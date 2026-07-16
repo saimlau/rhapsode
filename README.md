@@ -7,6 +7,8 @@ scholarly texts aloud.)
 Extraction with PyMuPDF, speech with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
 on CUDA (falls back to CPU).
 
+**📖 Full documentation: [saimailau.com/rhapsode](https://saimailau.com/rhapsode/)**
+
 ## 🚀 Usage
 
 ```bash

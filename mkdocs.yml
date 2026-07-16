@@ -1,0 +1,67 @@
+site_name: Rhapsode
+site_description: >-
+  Turn academic paper PDFs into narrated, synchronized read-along audio —
+  fully locally.
+site_url: https://saimailau.com/rhapsode/
+repo_url: https://github.com/saimlau/rhapsode
+repo_name: saimlau/rhapsode
+edit_uri: edit/main/docs/
+exclude_docs: |
+  superpowers/
+
+theme:
+  name: material
+  icon:
+    logo: material/waveform
+  favicon: assets/favicon.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep orange
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep orange
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.sections
+    - navigation.footer
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: installation.md
+      - CLI & read-along viewer: usage.md
+  - Guides:
+      - Library GUI: library.md
+      - Zotero plugin: zotero.md
+      - Compute backends: backends.md
+      - System voice (speechd): system-voice.md
+  - Reference:
+      - Configuration: configuration.md
+      - Troubleshooting & FAQ: troubleshooting.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.keys
+  - pymdownx.highlight
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/saimlau/rhapsode
