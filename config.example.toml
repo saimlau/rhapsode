@@ -14,6 +14,13 @@ voice = "af_heart"
 speed = 1.0
 # Read-along audio bitrate (24 kHz mono speech; 48k AAC is transparent).
 m4a_bitrate = "48k"
+# Where synthesis runs: "local" (your GPU/CPU) or "modal" (your own Modal
+# account — deploy modal_app.py first; see its docstring). Modal's free
+# monthly credits cover hundreds of audio-hours.
+backend = "local"
+# modal_endpoint = "https://<you>--rhapsode-tts-kokorotts-tts.modal.run"
+# modal_token_id = ""      # only if proxy auth is enabled in modal_app.py
+# modal_token_secret = ""
 # Idle model lifecycle in the GUI server: park the model to CPU RAM after
 # park_after_s (instant resume), fully unload after unload_after_s (~2 s
 # reload on next use). Frees ~700 MiB VRAM between generation bursts.

@@ -105,6 +105,17 @@ highlighting works identically on both backends.
 - Scanned/image-only PDFs are rejected (no OCR).
 - Design spec: `docs/superpowers/specs/2026-07-12-Rhapsode-design.md`.
 
+## Compute backends
+
+Synthesis runs locally by default (GPU strongly recommended, CPU works).
+No GPU? Deploy `modal_app.py` to your own [Modal](https://modal.com)
+account (`pip install modal && modal setup && modal deploy modal_app.py`)
+and set `[tts] backend = "modal"` + `modal_endpoint` in config.toml —
+inference then runs serverless on your Modal credits (free tier covers
+hundreds of audio-hours/month) while extraction, encoding, and the
+viewer stay on your machine. Word-level timing is identical on both
+backends (same Kokoro code).
+
 ## Kokoro as a system voice (Speech Dispatcher)
 
 `speechd/install-speechd-voice.sh` registers Kokoro as a user-level

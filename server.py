@@ -160,8 +160,7 @@ class Worker(threading.Thread):
                 info = p2a.generate_readalong(
                     self.lib.pdf_path(pid), self.lib.view_dir(pid),
                     self.voice, self.speed, self.dpi, progress,
-                    grobid_cfg=self.grobid_cfg,
-                    bitrate=self.tts_cfg.get("m4a_bitrate", "48k"))
+                    grobid_cfg=self.grobid_cfg, tts_cfg=self.tts_cfg)
                 fields = dict(status="ready", progress=1.0,
                               duration=round(info["duration"], 1),
                               warnings=info["warnings"])

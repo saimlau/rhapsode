@@ -168,19 +168,79 @@ def pipeline_status():
             "idle_s": round(time.time() - _PIPE_STATE["last_used"], 1)}
 
 
+def _local_unit_audio(units, voice, speed):
+    """Yield (unit, [(float32 wave, chunk-relative words)]) from the local
+    Kokoro pipeline. Word timestamps come straight from Kokoro's tokens."""
+    pipeline = get_pipeline()
+    for unit in units:
+        with TTS_LOCK:
+            results = list(pipeline(unit["text"], voice=voice, speed=speed))
+        chunks = []
+        for item in results:
+            audio = getattr(item, "audio", None)
+            if audio is None:
+                _, _, audio = item
+            words = [{"w": tok.text, "t0": round(tok.start_ts, 3),
+                      "t1": round(tok.end_ts, 3)}
+                     for tok in (getattr(item, "tokens", None) or [])
+                     if getattr(tok, "start_ts", None) is not None]
+            chunks.append((audio.detach().cpu().numpy(), words))
+        yield unit, chunks
+
+
+def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8):
+    """Yield the same shape as _local_unit_audio, synthesized on the user's
+    own Modal deployment (modal_app.py). The identical Kokoro code runs
+    there, so word timestamps are the same in kind — read-along sync does
+    not depend on where inference happens."""
+    import base64
+    import numpy as np
+    import requests
+
+    endpoint = (tts_cfg.get("modal_endpoint") or "").strip()
+    if not endpoint:
+        raise RuntimeError("[tts] backend='modal' but modal_endpoint is not "
+                           "set in config.toml (deploy modal_app.py first)")
+    headers = {}
+    if tts_cfg.get("modal_token_id"):
+        headers = {"Modal-Key": tts_cfg["modal_token_id"],
+                   "Modal-Secret": tts_cfg.get("modal_token_secret", "")}
+    session = requests.Session()
+    for i in range(0, len(units), batch):
+        group = units[i:i + batch]
+        resp = session.post(endpoint, headers=headers, timeout=600,
+                            json={"texts": [u["text"] for u in group],
+                                  "voice": voice, "speed": speed})
+        resp.raise_for_status()
+        results = resp.json()["results"]
+        if len(results) != len(group):
+            raise RuntimeError(f"modal endpoint returned {len(results)} "
+                               f"results for {len(group)} texts")
+        for unit, res in zip(group, results):
+            wave = (np.frombuffer(base64.b64decode(res["pcm_b64"]),
+                                  dtype="<i2").astype(np.float32) / 32767.0)
+            yield unit, [(wave, res.get("words") or [])]
+
+
 def synthesize(units, out_path, voice, speed, tags=None, progress=None,
-               bitrate="48k"):
+               bitrate="48k", tts_cfg=None):
     """Synthesize units, streaming raw PCM into ffmpeg as it is produced —
-    encoding overlaps GPU synthesis, only one chunk is ever in RAM, and no
+    encoding overlaps synthesis, only one chunk is ever in RAM, and no
     temp WAV touches disk. Writes to <out>.part and renames on success so a
     crash never leaves a truncated file at the final path. Records per-unit
-    start/end times and (when Kokoro provides them) per-word timestamps.
-    progress(i, n, text) is called per unit when given; otherwise prints."""
+    start/end times and per-word timestamps.
+    progress(i, n, text) is called per unit when given; otherwise prints.
+
+    tts_cfg["backend"]: "local" (default; on-device Kokoro) or "modal"
+    (user's own Modal deployment — see modal_app.py)."""
     import numpy as np
 
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg not found on PATH (needed for audio encoding)")
-    pipeline = get_pipeline()
+    tts_cfg = tts_cfg or {}
+    modal_backend = tts_cfg.get("backend", "local") == "modal"
+    producer = (_modal_unit_audio(units, voice, speed, tts_cfg)
+                if modal_backend else _local_unit_audio(units, voice, speed))
 
     # m4a for the read-along view: MP4's sample table makes browser seeks
     # sample-accurate, unlike (VBR) MP3 which drifts on every seek
@@ -210,7 +270,7 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
         samples += len(wave)
 
     try:
-        for i, unit in enumerate(units, 1):
+        for i, (unit, chunks) in enumerate(producer, 1):
             text = unit["text"]
             if progress:
                 progress(i, len(units), text)
@@ -218,19 +278,12 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
                 print(f"  [{i}/{len(units)}] {text[:60]}...", flush=True)
             unit["t0"] = samples / SAMPLE_RATE
             words = []
-            with TTS_LOCK:
-                results = list(pipeline(text, voice=voice, speed=speed))
-            for item in results:
-                audio = getattr(item, "audio", None)
-                if audio is None:
-                    _, _, audio = item
+            for wave, rel_words in chunks:
                 chunk_t0 = samples / SAMPLE_RATE
-                for tok in getattr(item, "tokens", None) or []:
-                    if getattr(tok, "start_ts", None) is not None:
-                        words.append({"w": tok.text,
-                                      "t0": round(chunk_t0 + tok.start_ts, 3),
-                                      "t1": round(chunk_t0 + tok.end_ts, 3)})
-                push(audio.detach().cpu().numpy())
+                words += [{"w": w["w"], "t0": round(chunk_t0 + w["t0"], 3),
+                           "t1": round(chunk_t0 + w["t1"], 3)}
+                          for w in rel_words]
+                push(wave)
             unit["t1"] = samples / SAMPLE_RATE
             unit["words"] = words
             n_pause = int(unit["pause"] * SAMPLE_RATE)
@@ -240,8 +293,9 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
         if proc.wait() != 0:
             raise RuntimeError(f"ffmpeg encode failed (rc={proc.returncode})")
         os.replace(part, out_path)
-        with TTS_LOCK:  # a long paper isn't "idle time" for the model
-            _PIPE_STATE["last_used"] = time.time()
+        if not modal_backend:
+            with TTS_LOCK:  # a long paper isn't "idle time" for the model
+                _PIPE_STATE["last_used"] = time.time()
     except BrokenPipeError:
         proc.wait()
         raise RuntimeError(f"ffmpeg died during encode (rc={proc.returncode})")
@@ -300,7 +354,7 @@ def write_viewer(out_dir, manifest):
 
 
 def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
-                       grobid_cfg=None, bitrate="48k"):
+                       grobid_cfg=None, tts_cfg=None):
     """Full pipeline: PDF -> readalong bundle in out_dir. Returns summary
     dict. progress(fraction, label) covers the whole pipeline: synthesis
     (with encoding overlapped) maps to 0-0.95, then pages/manifest — so the
@@ -312,8 +366,10 @@ def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
     tags = make_tags(pdf_path, meta)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "narration.mp3").unlink(missing_ok=True)  # pre-m4a leftover
+    tts_cfg = tts_cfg or {}
     duration = synthesize(units, out_dir / "narration.m4a", voice, speed,
-                          tags, unit_cb if progress else None, bitrate)
+                          tags, unit_cb if progress else None,
+                          tts_cfg.get("m4a_bitrate", "48k"), tts_cfg)
     if progress:
         progress(0.96, "rendering pages")
     render_pages(pdf_path, out_dir, dpi)
@@ -407,7 +463,7 @@ def main():
                 info = generate_readalong(args.pdf, out_dir, args.voice,
                                           args.speed, args.dpi,
                                           grobid_cfg=grobid_cfg,
-                                          bitrate=cfg["tts"]["m4a_bitrate"])
+                                          tts_cfg=cfg["tts"])
             except ValueError as e:
                 sys.exit(f"error: {e}")
             for w in info["warnings"]:
@@ -429,7 +485,7 @@ def main():
     print(f"{len(units)} units, ~{words} words (~{words / 170:.0f} min of audio)")
     out_path = args.output or args.pdf.with_suffix(".mp3")
     duration = synthesize(units, out_path, args.voice, args.speed,
-                          make_tags(args.pdf, meta))
+                          make_tags(args.pdf, meta), tts_cfg=cfg["tts"])
     print(f"done: {out_path}  ({duration / 60:.1f} min)")
 
 

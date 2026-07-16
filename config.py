@@ -9,7 +9,9 @@ from pathlib import Path
 DEFAULTS = {
     "library": {"path": "~/PaperAudio"},
     "tts": {"voice": "af_heart", "speed": 1.0, "m4a_bitrate": "48k",
-            "park_after_s": 300, "unload_after_s": 1800},
+            "park_after_s": 300, "unload_after_s": 1800,
+            "backend": "local", "modal_endpoint": "",
+            "modal_token_id": "", "modal_token_secret": ""},
     "render": {"dpi": 150},
     "gui": {"port": 7717, "open": True},
     "grobid": {"enabled": True, "url": "http://127.0.0.1:8070",
