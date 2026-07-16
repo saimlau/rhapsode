@@ -105,7 +105,6 @@ highlighting works identically on both backends.
   Springer layouts but are ratio-based, so other publishers should mostly
   work — always spot-check a new layout with `--text-only` first.
 - Scanned/image-only PDFs are rejected (no OCR).
-- Design specs live in `docs/superpowers/specs/`.
 
 ## ☁️ Compute backends
 

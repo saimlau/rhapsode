@@ -1,6 +1,6 @@
 """Local library web app for Rhapsode: drag-drop PDFs, a generation
 queue on a warm GPU model, and a podcast-style read-along playlist.
-Bound to 127.0.0.1 only. See docs/superpowers/specs/2026-07-12-gui-design.md."""
+Bound to 127.0.0.1 only."""
 
 import asyncio
 import hashlib

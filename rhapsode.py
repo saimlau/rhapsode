@@ -6,7 +6,7 @@ skips affiliations / page furniture / figure captions / References,
 strips citation brackets, and synthesizes speech locally with Kokoro
 (CUDA when available). `--play` builds and opens a browser read-along
 view with synced sentence highlighting; `--gui` starts the library web
-app. See docs/superpowers/specs/.
+app.
 """
 
 import argparse
