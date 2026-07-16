@@ -9,10 +9,18 @@ REPO="$(dirname "$PLUGIN_DIR")"
 DIST="$PLUGIN_DIR/dist"
 mkdir -p "$DIST"
 
-cat > "$PLUGIN_DIR/prefs.js" <<EOF
+if [ "${1:-}" = "--release" ]; then
+  # public build: no personal repo path — users set extensions.rhapsode.repo
+  # themselves (or start the server manually) for autostart
+  cat > "$PLUGIN_DIR/prefs.js" <<EOF
+pref("extensions.rhapsode.port", 7717);
+EOF
+else
+  cat > "$PLUGIN_DIR/prefs.js" <<EOF
 pref("extensions.rhapsode.repo", "$REPO");
 pref("extensions.rhapsode.port", 7717);
 EOF
+fi
 
 rm -f "$DIST/rhapsode.xpi"
 (cd "$PLUGIN_DIR" && zip -q "$DIST/rhapsode.xpi" \

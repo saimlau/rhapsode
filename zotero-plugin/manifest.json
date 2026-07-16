@@ -7,7 +7,7 @@
   "applications": {
     "zotero": {
       "id": "rhapsode@saimai.lau",
-      "update_url": "https://raw.githubusercontent.com/saimai/rhapsode/main/zotero-plugin/updates.json",
+      "update_url": "https://raw.githubusercontent.com/saimlau/rhapsode/main/zotero-plugin/updates.json",
       "strict_min_version": "7.0",
       "strict_max_version": "999.*"
     }
