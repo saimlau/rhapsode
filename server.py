@@ -123,6 +123,7 @@ class Worker(threading.Thread):
         self.q = queue.Queue()
 
     def enqueue(self, pid):
+        self.last_activity = time.time()
         self.q.put(pid)
 
     def _idle_tick(self):
@@ -135,6 +136,11 @@ class Worker(threading.Thread):
         if (self.idle_exit_min and self.q.empty()
                 and time.time() - self.last_activity
                     >= self.idle_exit_min * 60):
+            time.sleep(1)  # narrow the check-to-kill race: anything that
+            if (not self.q.empty()  # arrived meanwhile vetoes the exit
+                    or time.time() - self.last_activity
+                        < self.idle_exit_min * 60):
+                return
             # nothing has touched the server (SSE heartbeats excluded) —
             # exit cleanly; SIGINT lets uvicorn shut down gracefully and
             # the run() finally-block stop GROBID and flush the registry
@@ -185,7 +191,9 @@ class Worker(threading.Thread):
             except Exception as e:  # keep the queue alive on any failure
                 self.lib.update(pid, status="error", error=str(e))
             finally:
-                if self.grobid_cfg:  # generation time isn't GROBID idle time
+                self.last_activity = time.time()  # work isn't idle time —
+                # the idle-exit clock starts when the batch ENDS
+                if self.grobid_cfg:
                     import grobid
                     grobid.touch()
 
@@ -445,15 +453,24 @@ def create_app(lib, worker):
         if not text:
             raise HTTPException(400, "empty text")
         speed = min(max(float(rate or 1.0), 0.5), 2.0)
-        pipeline = p2a.get_pipeline()
         parts = []
-        with p2a.TTS_LOCK:
-            for item in pipeline(text[:5000], voice=voice or worker.voice,
-                                 speed=speed):
-                audio = getattr(item, "audio", None)
-                if audio is None:
-                    _, _, audio = item
-                parts.append(audio.detach().cpu().numpy())
+        if worker.tts_cfg.get("backend") == "modal":
+            # speechd voice rides the configured backend too — don't
+            # force-load a local model the user configured away
+            unit = [{"text": text[:5000], "pause": 0}]
+            for _u, chunks in p2a._modal_unit_audio(
+                    unit, voice or worker.voice, speed, worker.tts_cfg):
+                parts += [w for w, _words in chunks]
+        else:
+            pipeline = p2a.get_pipeline()
+            with p2a.TTS_LOCK:
+                for item in pipeline(text[:5000],
+                                     voice=voice or worker.voice,
+                                     speed=speed):
+                    audio = getattr(item, "audio", None)
+                    if audio is None:
+                        _, _, audio = item
+                    parts.append(audio.detach().cpu().numpy())
         if not parts:
             raise HTTPException(500, "synthesis produced no audio")
         buf = io.BytesIO()

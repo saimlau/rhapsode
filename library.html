@@ -198,6 +198,8 @@ const $ = id => document.getElementById(id);
 let state = { papers: {}, order: [], playlists: {}, settings: {} };
 let currentId = null, dragId = null, dragAt = 0;
 let activePl = localStorage.getItem("rhapsode.activePl") || localStorage.getItem("paper2audio.activePl") || null;
+localStorage.removeItem("paper2audio.activePl");  // one-time migration
+if (activePl) localStorage.setItem("rhapsode.activePl", activePl);
 let selected = new Set(), lastIdx = null;
 
 const jbody = obj => ({ headers: { "Content-Type": "application/json" },

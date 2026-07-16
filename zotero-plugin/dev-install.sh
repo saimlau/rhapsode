@@ -18,6 +18,9 @@ if [ -z "$PROFILE" ]; then
 fi
 
 mkdir -p "$PROFILE/extensions"
+# remove any pre-rename install so the two IDs don't coexist
+rm -f "$PROFILE/extensions/paper2audio@saimai.lau" \
+      "$PROFILE/extensions/paper2audio@saimai.lau.xpi"
 printf '%s' "$PLUGIN_DIR" > "$PROFILE/extensions/rhapsode@saimai.lau"
 
 # Force Zotero to rescan extensions on next launch

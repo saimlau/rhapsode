@@ -219,9 +219,26 @@ function openTab(win, url) {
 function install() {}
 function uninstall() {}
 
+async function _uninstallOldPlugin() {
+  // the pre-rename plugin (paper2audio@saimai.lau) is a different add-on
+  // ID, so it would coexist with this one: duplicate menus, two tabs.
+  try {
+    const { AddonManager } =
+      ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
+    const old = await AddonManager.getAddonByID("paper2audio@saimai.lau");
+    if (old) {
+      log("uninstalling old paper2audio plugin");
+      await old.uninstall();
+    }
+  } catch (e) {
+    log("old-plugin cleanup failed (harmless): " + e);
+  }
+}
+
 function startup({ rootURI: uri }) {
   rootURI = uri;
   log("startup, rootURI=" + rootURI);
+  _uninstallOldPlugin();
   // onMainWindowLoad only fires for windows opened after startup; when the
   // plugin is installed into a running Zotero, inject into existing windows
   for (const win of Zotero.getMainWindows()) {

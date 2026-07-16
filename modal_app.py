@@ -36,10 +36,18 @@ REQUIRES_PROXY_AUTH = False
 
 app = modal.App("rhapsode-tts")
 
+def _bake_weights():
+    # download Kokoro weights at image-build time so cold starts don't
+    # re-fetch ~330 MB on every scale-from-zero
+    from kokoro import KPipeline
+    KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", device="cpu")
+
+
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("espeak-ng")
     .pip_install("kokoro>=0.9", "soundfile", "numpy")
+    .run_function(_bake_weights)
 )
 
 
@@ -59,10 +67,14 @@ class KokoroTTS:
         voice = req.get("voice", "af_heart")
         speed = float(req.get("speed", 1.0))
         results = []
+        too_long = [i for i, t in enumerate(texts) if len(str(t)) > 5000]
+        if too_long:
+            return {"error": f"texts {too_long} exceed 5000 chars — split "
+                             "them client-side", "results": []}
         for text in texts[:64]:
             waves, words = [], []
             offset = 0.0
-            for item in self.pipeline(str(text)[:5000], voice=voice,
+            for item in self.pipeline(str(text), voice=voice,
                                       speed=speed):
                 audio = getattr(item, "audio", None)
                 if audio is None:
