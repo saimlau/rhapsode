@@ -20,11 +20,15 @@ in Zotero: **Tools → Plugins → ⚙ → Install Plugin From File**. The plugi
 auto-updates from future releases. If you had the old *paper2audio* plugin,
 it is uninstalled automatically.
 
-The plugin needs to know where your Rhapsode checkout lives so it can start
-the server; a release XPI asks once. For development, use
-`zotero-plugin/dev-install.sh` **while Zotero is closed** — it registers
-the source directory directly, and `zotero-plugin/build-xpi.sh` builds the
-XPI.
+If a Rhapsode server is already running (default port 7717), the plugin
+just uses it. To let the plugin **start the server itself**, tell it where
+your checkout lives: Zotero **Settings → Advanced → Config Editor**, create
+the preference `extensions.rhapsode.repo` with the path to the cloned repo.
+(A custom port goes in `extensions.rhapsode.port`.)
+
+For development, use `zotero-plugin/dev-install.sh` **while Zotero is
+closed** — it registers the source directory directly and pre-sets the
+repo path; `zotero-plugin/build-xpi.sh` builds the XPI.
 
 ## How it works
 
