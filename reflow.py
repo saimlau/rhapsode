@@ -40,6 +40,12 @@ standalone mathematical equations, table content (cells, rows, numeric data),
 and everything from References/Bibliography onward (including acknowledgements,
 funding, author contributions, and the reference list).
 
+IMPORTANT: a block whose first word is lowercase, or whose tail does not end
+with sentence punctuation, is a body paragraph split across a column or page
+break (often stranded next to a footnote or the page bottom). KEEP these — they
+are body text, never furniture — and place them so the sentence reads
+continuously.
+
 Return the content blocks in correct reading order (each page: left column
 top-to-bottom, then right column; a block whose tail does not end with
 sentence punctuation continues into the next content block).
@@ -160,22 +166,34 @@ HEADING_PAUSE_S = 0.7
 PARAGRAPH_PAUSE_S = 0.5
 SENTENCE_PAUSE_S = 0.25
 
-# per-window budget (~30k tokens of block summary) and a sanity cap on how
-# many windows a document may split into (a ~2000-page book); papers are one
-# window, a 400-page thesis is ~12
-WINDOW_CHARS = 120_000
-MAX_WINDOWS = 80
+# Per-window budget of block-summary chars. Big-context capable runners
+# (claude/codex/api) take large windows — a paper is one call. Small local
+# models classify far more reliably on fewer blocks at a time, so the ollama
+# runner uses a much smaller window (a paper becomes a few parallel calls).
+# MAX_BLOCKS caps blocks/window for docs with many tiny blocks; MAX_WINDOWS
+# caps total windows (~a 1000-page book).
+WINDOW_CHARS_LARGE = 100_000
+WINDOW_CHARS_SMALL = 15_000
+MAX_BLOCKS = 70
+MAX_WINDOWS = 400
 
 
-def _windows(blocks):
-    """Split page-ordered blocks into windows each under WINDOW_CHARS of block
-    summary. Cutting between blocks is fine — reading order is preserved and
-    the global assembly rejoins any paragraph split across a window seam."""
+def _window_limit(cfg):
+    if llm.resolve(cfg) == "ollama":
+        return cfg.get("ollama_window_chars", WINDOW_CHARS_SMALL)
+    return cfg.get("window_chars", WINDOW_CHARS_LARGE)
+
+
+def _windows(blocks, limit):
+    """Split page-ordered blocks into windows each under `limit` chars of block
+    summary (and MAX_BLOCKS blocks). Cutting between blocks is fine — reading
+    order is preserved and the global assembly rejoins any paragraph split
+    across a window seam."""
     out, cur, size = [], [], 0
     for b in blocks:
         h, t = _headtail(b["text"])
         est = len(h) + len(t) + 60
-        if cur and size + est > WINDOW_CHARS:
+        if cur and (size + est > limit or len(cur) >= MAX_BLOCKS):
             out.append(cur)
             cur, size = [], 0
         cur.append(b)
@@ -185,8 +203,21 @@ def _windows(blocks):
     return out
 
 
+DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "order": {"type": "array", "items": {"type": "integer"}},
+        "headings": {"type": "array", "items": {"type": "integer"}},
+        "authors": {"type": "string"},
+        "year": {"type": ["integer", "null"]},
+    },
+    "required": ["order", "headings"],
+}
+
+
 def _classify(blocks, llm_cfg):
-    return _parse_decision(llm.run(PROMPT + _compact(blocks), llm_cfg))
+    return _parse_decision(llm.run(PROMPT + _compact(blocks), llm_cfg,
+                                   fmt=DECISION_SCHEMA))
 
 
 def _classify_windows(windows, llm_cfg):
@@ -258,7 +289,7 @@ def extract_document(pdf_path, llm_cfg):
     # context window, so classify page-ordered windows and stitch — a two-level
     # hierarchy (document -> windows -> blocks). Windows classify in parallel;
     # cross-window continuation is handled by the global assembly below.
-    windows = _windows(blocks)
+    windows = _windows(blocks, _window_limit(llm_cfg))
     if len(windows) > MAX_WINDOWS:
         raise llm.LLMError(f"document too large ({doc.page_count} pages, "
                            f"{len(windows)} windows > {MAX_WINDOWS})")

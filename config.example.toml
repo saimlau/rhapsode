@@ -58,7 +58,20 @@ timeout_s = 120
 # so re-extracting a paper is instant. Default cache dir: ~/.cache/rhapsode/llm.
 cache = true
 # cache_dir = ""
+# --- ollama runner tuning (only used when runner resolves to ollama) ---
 # ollama_url = "http://127.0.0.1:11434"   # if ollama isn't on the default host
+# Keep the model resident in VRAM between papers ("-1" forever, "0" unload).
+# ollama_keep_alive = "30m"
+# Context window. Must hold a window's block summary; the default fits the
+# small window below with room to spare.
+# ollama_num_ctx = 16384
+# Gemma 4 needs thinking OFF (its default reasoning mode returns empty output).
+# ollama_think = false
+# Small local models classify far more reliably on fewer blocks at a time, so
+# the ollama runner uses small windows (a paper becomes a few parallel calls);
+# capable big-context runners (claude/codex/api) use window_chars instead.
+# ollama_window_chars = 15000
+# window_chars = 100000
 # Only for runner = "api" (a raw key, billed per-use — the CLIs above don't
 # need this). provider is "anthropic" | "openai" | "gemini".
 # api_provider = "gemini"

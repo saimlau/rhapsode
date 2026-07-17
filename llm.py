@@ -94,14 +94,14 @@ def _run_cli(cmd, prompt, timeout, name):
     return out
 
 
-def _run_claude(prompt, cfg, timeout):
+def _run_claude(prompt, cfg, timeout, fmt=None):
     cmd = ["claude", "-p", "-", "--output-format", "text"]
     if cfg.get("model"):
         cmd += ["--model", cfg["model"]]
     return _run_cli(cmd, prompt, timeout, "claude")
 
 
-def _run_codex(prompt, cfg, timeout):
+def _run_codex(prompt, cfg, timeout, fmt=None):
     # codex reads the prompt from stdin when given '-'; --json off keeps it text
     cmd = ["codex", "exec", "-"]
     if cfg.get("model"):
@@ -109,24 +109,41 @@ def _run_codex(prompt, cfg, timeout):
     return _run_cli(cmd, prompt, timeout, "codex")
 
 
-def _run_ollama(prompt, cfg, timeout):
-    model = cfg.get("model") or "gemma3:12b"
-    body = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode()
-    req = urllib.request.Request(_ollama_url(cfg) + "/api/generate", data=body,
+def _run_ollama(prompt, cfg, timeout, fmt=None):
+    model = cfg.get("model") or "gemma4:12b"
+    # /api/chat applies the model's chat template (raw /api/generate does not,
+    # so an instruction-tuned model just rambles). think=false is REQUIRED for
+    # Gemma 4: its default thinking mode spends the whole token budget on hidden
+    # reasoning and returns empty content (ollama#15428, #16583). num_ctx must
+    # hold the whole block summary (Ollama defaults to 4096, which silently
+    # truncates the instructions). fmt = a JSON schema for constrained decoding.
+    payload = {"model": model,
+               "messages": [{"role": "user", "content": prompt}],
+               "stream": False, "think": cfg.get("ollama_think", False),
+               "keep_alive": cfg.get("ollama_keep_alive", "30m"),
+               # temperature 0 (greedy): classification must be deterministic —
+               # sampling makes the kept-block set vary wildly run to run
+               "options": {"num_ctx": cfg.get("ollama_num_ctx", 16384),
+                           "temperature": cfg.get("ollama_temperature", 0)}}
+    if fmt is not None:
+        payload["format"] = fmt
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(_ollama_url(cfg) + "/api/chat", data=body,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            out = json.loads(r.read()).get("response", "").strip()
+            out = (json.loads(r.read()).get("message") or {}).get("content", "")
     except urllib.error.HTTPError as e:
         raise LLMError(f"ollama HTTP {e.code}: model '{model}' not pulled?")
     except (urllib.error.URLError, OSError) as e:
         raise LLMError(f"ollama unreachable: {e}")
+    out = out.strip()
     if not out:
         raise LLMError("ollama returned no output")
     return out
 
 
-def _run_api(prompt, cfg, timeout):
+def _run_api(prompt, cfg, timeout, fmt=None):
     provider = (cfg.get("api_provider") or "").lower()
     key = cfg.get("api_key")
     if not provider:
@@ -198,11 +215,12 @@ def _cache_key(runner, prompt, cfg):
     return h.hexdigest()
 
 
-def run(prompt, cfg, timeout=None):
+def run(prompt, cfg, timeout=None, fmt=None):
     """Run prompt through the resolved runner; raise LLMError if none/failure.
 
-    Results are cached on disk keyed by (runner, model, prompt) so re-extracting
-    the same paper is instant. Disable with [llm] cache = false.
+    fmt, if given, is a JSON schema — the ollama runner uses it for constrained
+    decoding. Results are cached on disk keyed by (runner, model, prompt, fmt)
+    so re-extracting the same paper is instant. Disable with [llm] cache = false.
     """
     runner = resolve(cfg)
     if not runner:
@@ -211,12 +229,14 @@ def run(prompt, cfg, timeout=None):
     caching = cfg.get("cache", True)
     path = None
     if caching:
-        path = _cache_dir(cfg) / (_cache_key(runner, prompt, cfg) + ".txt")
+        key = _cache_key(runner, prompt + "\0" + json.dumps(fmt, sort_keys=True),
+                         cfg)
+        path = _cache_dir(cfg) / (key + ".txt")
         try:
             return path.read_text()
         except (OSError, ValueError):
             pass
-    out = _RUNNERS[runner](prompt, cfg, timeout or cfg.get("timeout_s", 120))
+    out = _RUNNERS[runner](prompt, cfg, timeout or cfg.get("timeout_s", 120), fmt)
     if caching and path is not None:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
