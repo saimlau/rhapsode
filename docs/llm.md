@@ -35,7 +35,28 @@ GPU:
 | `ollama` | a local Gemma model on your GPU | free, private, fast — the recommended default |
 | `claude` | your Claude Pro/Max subscription (Claude Code) | no key; a call runs a full agent turn, so it's slower (a couple of minutes) |
 | `codex` | your ChatGPT Plus/Pro subscription (Codex CLI) | no key; same agent-turn overhead |
-| `api` | a raw API key (Anthropic / OpenAI / Gemini) | pay-per-use / free tier; fastest, needs a key |
+| `api` | a raw API key (Anthropic / OpenAI / Gemini), or any OpenAI-compatible endpoint via `api_base_url` | pay-per-use / free tier; fastest, needs a key |
+
+### Offloading to Modal (or any OpenAI-compatible host)
+
+No local GPU and no subscription? Run the extractor model on **your own Modal
+account**, the same way the [TTS backend](backends.md) does. `modal_llm_app.py`
+deploys an open model (Gemma) with vLLM behind an OpenAI-compatible endpoint;
+point Rhapsode at it with the `api` runner:
+
+```toml
+[llm]
+enabled = true
+runner = "api"
+api_base_url = "https://<you>--rhapsode-llm-serve.modal.run/v1"
+api_key = "<your endpoint key>"
+model = "google/gemma-3-12b-it"
+```
+
+Because the endpoint is OpenAI-compatible, no Modal-specific code is needed —
+the same `api_base_url` also works for a local vLLM, OpenRouter, together.ai,
+and similar. Modal scales the GPU to zero when idle, so it costs nothing between
+sessions.
 
 `runner = "auto"` picks the first available in that order, so a machine with
 Ollama never phones home. (Gemini's CLI is EOL and Antigravity is an IDE with

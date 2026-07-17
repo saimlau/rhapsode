@@ -18,7 +18,7 @@ DEFAULTS = {
             "ollama_keep_alive": "30m", "ollama_num_ctx": 16384,
             "ollama_think": False, "ollama_window_chars": 15000,
             "window_chars": 100000,
-            "api_provider": "", "api_key": "",
+            "api_provider": "", "api_key": "", "api_base_url": "",
             "cache": True, "cache_dir": ""},
     "gui": {"port": 7717, "open": True, "idle_exit_min": 0},
     "grobid": {"enabled": True, "url": "http://127.0.0.1:8070",

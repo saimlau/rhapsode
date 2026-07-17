@@ -147,7 +147,9 @@ def _run_api(prompt, cfg, timeout, fmt=None):
     provider = (cfg.get("api_provider") or "").lower()
     key = cfg.get("api_key")
     if not provider:
-        if os.environ.get("ANTHROPIC_API_KEY"):
+        if cfg.get("api_base_url"):
+            provider = "openai"  # a custom endpoint is OpenAI-compatible
+        elif os.environ.get("ANTHROPIC_API_KEY"):
             provider = "anthropic"
         elif os.environ.get("OPENAI_API_KEY"):
             provider = "openai"
@@ -164,12 +166,18 @@ def _run_api(prompt, cfg, timeout, fmt=None):
                      "anthropic-version": "2023-06-01"})
         parse = lambda d: "".join(b.get("text", "") for b in d.get("content", []))
     elif provider == "openai":
+        # any OpenAI-compatible endpoint: OpenAI itself, or a self-hosted
+        # vLLM/Ollama server (e.g. Gemma on your own Modal account) via
+        # api_base_url. fmt -> JSON mode so the schema-shaped reply parses.
         key = key or os.environ.get("OPENAI_API_KEY")
         model = cfg.get("model") or "gpt-4o-mini"
+        base = (cfg.get("api_base_url") or "https://api.openai.com/v1").rstrip("/")
+        payload = {"model": model, "temperature": 0,
+                   "messages": [{"role": "user", "content": prompt}]}
+        if fmt is not None:
+            payload["response_format"] = {"type": "json_object"}
         req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=json.dumps({"model": model,
-                             "messages": [{"role": "user", "content": prompt}]}).encode(),
+            base + "/chat/completions", data=json.dumps(payload).encode(),
             headers={"content-type": "application/json",
                      "authorization": f"Bearer {key or ''}"})
         parse = lambda d: d["choices"][0]["message"]["content"]

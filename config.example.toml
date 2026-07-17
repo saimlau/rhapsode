@@ -76,6 +76,10 @@ cache = true
 # need this). provider is "anthropic" | "openai" | "gemini".
 # api_provider = "gemini"
 # api_key = ""
+# Point at any OpenAI-compatible endpoint instead of api.openai.com: a model on
+# your own Modal account (see modal_llm_app.py), a local vLLM, OpenRouter, etc.
+# Setting this implies an OpenAI-compatible provider.
+# api_base_url = "https://<you>--rhapsode-llm-serve.modal.run/v1"
 
 [gui]
 # Port for `rhapsode --gui` (auto-probes upward if busy).
