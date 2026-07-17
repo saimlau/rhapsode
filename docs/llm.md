@@ -68,14 +68,19 @@ handy for spot-checking with `--text-only`:
 ```bash
 # install ollama (native, no Docker) and pull a Gemma model
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull gemma3:12b        # fits a 16 GB GPU; 27b if you have the room
+ollama pull gemma4:12b        # fits a 16 GB GPU; 26b MoE is tighter
 ```
 
 ```toml
 [llm]
 enabled = true
 runner  = "ollama"
-model   = "gemma3:12b"
+model   = "gemma4:12b"
 ```
+
+Gemma 4 (Apr 2026) sizes that suit a 16 GB GPU: **12B** comfortably, the
+**26B MoE** (≈4B active/token) more tightly; the 31B dense model is
+workstation-class. See [ollama.com/library/gemma4](https://ollama.com/library/gemma4)
+for exact tags.
 
 That's it — reflow now runs locally on your GPU, free, for every paper.

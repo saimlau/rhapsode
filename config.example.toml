@@ -56,9 +56,9 @@ runner = "auto"
 #              will miss silent GROBID drops.
 #   "never"  — disabled.
 when = "always"
-# Model id: an ollama model ("gemma3:12b", "gemma3:27b", ...) or an api model
-# id. Leave blank for the runner's default. The CLIs use their own logged-in
-# model regardless of this.
+# Model id: an ollama model ("gemma4:12b" fits a 16 GB GPU; "gemma4:26b" MoE
+# is tighter; see ollama.com/library/gemma4) or an api model id. Leave blank
+# for the runner's default. The CLIs use their own logged-in model regardless.
 model = ""
 timeout_s = 120
 # ollama_url = "http://127.0.0.1:11434"   # if ollama isn't on the default host
