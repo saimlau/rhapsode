@@ -12,12 +12,14 @@ Every backend takes a prompt string and returns the model's text. Failures
 raise LLMError; callers treat that as "skip cleanup", never as fatal.
 """
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 PREFERENCE = ["ollama", "claude", "codex", "api"]
 
@@ -181,11 +183,46 @@ _RUNNERS = {"claude": _run_claude, "codex": _run_codex,
             "ollama": _run_ollama, "api": _run_api}
 
 
+def _cache_dir(cfg):
+    if cfg.get("cache_dir"):
+        return Path(cfg["cache_dir"]).expanduser()
+    base = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
+    return Path(base) / "rhapsode" / "llm"
+
+
+def _cache_key(runner, prompt, cfg):
+    # content-addressed: same paper + runner + model -> same key, no staleness
+    h = hashlib.sha256()
+    h.update(f"{runner}\0{cfg.get('model', '')}\0".encode())
+    h.update(prompt.encode())
+    return h.hexdigest()
+
+
 def run(prompt, cfg, timeout=None):
-    """Run prompt through the resolved runner; raise LLMError if none/failure."""
+    """Run prompt through the resolved runner; raise LLMError if none/failure.
+
+    Results are cached on disk keyed by (runner, model, prompt) so re-extracting
+    the same paper is instant. Disable with [llm] cache = false.
+    """
     runner = resolve(cfg)
     if not runner:
         raise LLMError("no LLM runner available (install ollama/claude/codex "
                        "or set [llm] api_key)")
-    timeout = timeout or cfg.get("timeout_s", 120)
-    return _RUNNERS[runner](prompt, cfg, timeout)
+    caching = cfg.get("cache", True)
+    path = None
+    if caching:
+        path = _cache_dir(cfg) / (_cache_key(runner, prompt, cfg) + ".txt")
+        try:
+            return path.read_text()
+        except (OSError, ValueError):
+            pass
+    out = _RUNNERS[runner](prompt, cfg, timeout or cfg.get("timeout_s", 120))
+    if caching and path is not None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".part")
+            tmp.write_text(out)
+            os.replace(tmp, path)  # atomic
+        except OSError:
+            pass
+    return out

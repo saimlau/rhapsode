@@ -60,10 +60,9 @@ def prepare_units(pdf_path, grobid_cfg=None, llm_cfg=None):
                 body = [u for u in units if u["kind"] == "body"]
                 words = sum(len(u["text"].split()) for u in body)
                 if len(body) >= 3 and words >= 300:
-                    if meta.get("year") is None:
-                        from extraction import _page_year
-                        meta["year"] = _page_year(fitz.open(pdf_path)[0])
-                    return units, meta, [f"extracted via LLM ({runner})"]
+                    meta = _resolve_meta(pdf_path, meta)
+                    return units, meta, [f"extracted via LLM ({runner}); "
+                                         f"metadata via heuristic parser"]
                 fb = f"LLM extraction returned too little ({words} words); "
             except Exception as e:
                 fb = f"LLM extraction failed ({type(e).__name__}: {e}); "
@@ -74,6 +73,29 @@ def prepare_units(pdf_path, grobid_cfg=None, llm_cfg=None):
         return units, meta, [fb + "used base extractor"] + warnings
 
     return _base_extract(pdf_path, grobid_cfg)
+
+
+def _resolve_meta(pdf_path, llm_meta):
+    """Metadata for the LLM-body path. The block classifier truncates long
+    titles and misses authors in long lists (it only sees each block's
+    first/last sentence), so prefer the tuned heuristic front-matter parser,
+    with the LLM's values and a page-scan for the year as fallbacks."""
+    meta = dict(llm_meta or {})
+    try:
+        from extraction import extract_segments
+        _, _, hm = extract_segments(pdf_path)
+        for k in ("title", "authors", "year"):
+            if hm.get(k):
+                meta[k] = hm[k]
+    except Exception:
+        pass
+    if meta.get("year") is None:
+        try:
+            from extraction import _page_year
+            meta["year"] = _page_year(fitz.open(pdf_path)[0])
+        except Exception:
+            pass
+    return meta
 
 
 def _base_extract(pdf_path, grobid_cfg=None):

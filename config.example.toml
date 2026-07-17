@@ -54,6 +54,10 @@ runner = "auto"
 # for the runner's default. The CLIs use their own logged-in model regardless.
 model = ""
 timeout_s = 120
+# Cache classification results on disk, keyed by paper content + runner + model,
+# so re-extracting a paper is instant. Default cache dir: ~/.cache/rhapsode/llm.
+cache = true
+# cache_dir = ""
 # ollama_url = "http://127.0.0.1:11434"   # if ollama isn't on the default host
 # Only for runner = "api" (a raw key, billed per-use — the CLIs above don't
 # need this). provider is "anthropic" | "openai" | "gemini".

@@ -160,9 +160,50 @@ HEADING_PAUSE_S = 0.7
 PARAGRAPH_PAUSE_S = 0.5
 SENTENCE_PAUSE_S = 0.25
 
-# ~60k tokens of block summary; papers sit far under this, book-length
-# documents (theses) blow past it and fall back to the base extractor
-MAX_SUMMARY_CHARS = 250_000
+# per-window budget (~30k tokens of block summary) and a sanity cap on how
+# many windows a document may split into (a ~2000-page book); papers are one
+# window, a 400-page thesis is ~12
+WINDOW_CHARS = 120_000
+MAX_WINDOWS = 80
+
+
+def _windows(blocks):
+    """Split page-ordered blocks into windows each under WINDOW_CHARS of block
+    summary. Cutting between blocks is fine — reading order is preserved and
+    the global assembly rejoins any paragraph split across a window seam."""
+    out, cur, size = [], [], 0
+    for b in blocks:
+        h, t = _headtail(b["text"])
+        est = len(h) + len(t) + 60
+        if cur and size + est > WINDOW_CHARS:
+            out.append(cur)
+            cur, size = [], 0
+        cur.append(b)
+        size += est
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _classify(blocks, llm_cfg):
+    return _parse_decision(llm.run(PROMPT + _compact(blocks), llm_cfg))
+
+
+def _classify_windows(windows, llm_cfg):
+    """One classification per window. Multiple windows run concurrently (the
+    runner calls are I/O-bound); a window that fails contributes nothing rather
+    than sinking the whole document."""
+    if len(windows) == 1:
+        return [_classify(windows[0], llm_cfg)]
+    import concurrent.futures as cf
+
+    def one(w):
+        try:
+            return _classify(w, llm_cfg)
+        except Exception:
+            return {"order": [], "headings": []}
+    with cf.ThreadPoolExecutor(max_workers=4) as ex:
+        return list(ex.map(one, windows))
 
 
 _PUA = re.compile("[\ue000-\uf8ff]")  # private-use area: garbled math glyphs
@@ -212,17 +253,23 @@ def extract_document(pdf_path, llm_cfg):
         raise llm.LLMError("no text blocks (scanned/image-only PDF?)")
     byid = {b["id"]: b for b in blocks}
 
-    compact = _compact(blocks)
-    # single-call classification suits papers (~5-15k tokens); book-length
+    # A single classification call suits papers (~5-15k tokens). Book-length
     # documents (a 400-page thesis is ~330k tokens of block summary) exceed any
-    # context window, so bail early to the base extractor instead of burning a
-    # long timeout on a doomed call
-    if len(compact) > MAX_SUMMARY_CHARS:
-        raise llm.LLMError(f"document too large for single-call extraction "
-                           f"({doc.page_count} pages, {len(blocks)} blocks)")
-    decision = _parse_decision(llm.run(PROMPT + compact, llm_cfg))
-    order = [i for i in decision.get("order", []) if i in byid]
-    headings = {i for i in decision.get("headings", []) if i in byid}
+    # context window, so classify page-ordered windows and stitch — a two-level
+    # hierarchy (document -> windows -> blocks). Windows classify in parallel;
+    # cross-window continuation is handled by the global assembly below.
+    windows = _windows(blocks)
+    if len(windows) > MAX_WINDOWS:
+        raise llm.LLMError(f"document too large ({doc.page_count} pages, "
+                           f"{len(windows)} windows > {MAX_WINDOWS})")
+    decisions = _classify_windows(windows, llm_cfg)
+
+    order, headings, authors, year = [], set(), "", None
+    for d in decisions:
+        order += [i for i in d.get("order", []) if i in byid]
+        headings |= {i for i in d.get("headings", []) if i in byid}
+        authors = authors or (d.get("authors") or "").strip()
+        year = year or d.get("year")
     if not order:
         raise llm.LLMError("LLM kept no content blocks")
 
@@ -258,6 +305,5 @@ def extract_document(pdf_path, llm_cfg):
         if i in headings:
             title = clean_text(" ".join(t[0] for t in _tokens(byid[i]["words"])))
             break
-    meta = {"title": title, "authors": (decision.get("authors") or "").strip(),
-            "year": decision.get("year")}
+    meta = {"title": title, "authors": authors, "year": year}
     return units, meta
