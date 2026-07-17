@@ -113,11 +113,12 @@ class Worker(threading.Thread):
     queue has been idle, so nothing heavy stays resident between bursts."""
 
     def __init__(self, lib, voice, speed, dpi, grobid_cfg=None, tts_cfg=None,
-                 idle_exit_min=0):
+                 idle_exit_min=0, llm_cfg=None):
         super().__init__(daemon=True)
         self.lib, self.voice, self.speed, self.dpi = lib, voice, speed, dpi
         self.grobid_cfg = grobid_cfg
         self.tts_cfg = tts_cfg or {}
+        self.llm_cfg = llm_cfg
         self.idle_exit_min = idle_exit_min or 0
         self.last_activity = time.time()
         self.q = queue.Queue()
@@ -178,7 +179,8 @@ class Worker(threading.Thread):
                 info = p2a.generate_readalong(
                     self.lib.pdf_path(pid), self.lib.view_dir(pid),
                     self.voice, self.speed, self.dpi, progress,
-                    grobid_cfg=self.grobid_cfg, tts_cfg=self.tts_cfg)
+                    grobid_cfg=self.grobid_cfg, tts_cfg=self.tts_cfg,
+                    llm_cfg=self.llm_cfg)
                 fields = dict(status="ready", progress=1.0,
                               duration=round(info["duration"], 1),
                               warnings=info["warnings"])
@@ -510,7 +512,7 @@ def _free_port(start):
 
 
 def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
-        tts_cfg=None, idle_exit_min=0):
+        tts_cfg=None, idle_exit_min=0, llm_cfg=None):
     root = Path(root)
     if not root.exists() and not root.parent.exists():
         sys.exit(f"error: library location unavailable (is the volume "
@@ -518,7 +520,8 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     root.mkdir(parents=True, exist_ok=True)
 
     lib = Library(root)
-    worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg, idle_exit_min)
+    worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg, idle_exit_min,
+                    llm_cfg)
     with lib.lock:  # crash recovery: re-queue anything left mid-generation
         for pid, entry in lib.data["papers"].items():
             if entry["status"] in ("generating", "pending"):

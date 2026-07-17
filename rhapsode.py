@@ -13,6 +13,7 @@ import argparse
 import gc
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,13 +38,74 @@ TTS_LOCK = threading.Lock()  # one inference at a time (worker + /tts
                              # endpoint) and all pipeline state transitions
 
 
-def prepare_units(pdf_path, grobid_cfg=None):
+_FURNITURE_RE = re.compile(
+    r'\b[\w.+-]+@[\w.-]+\.\w+\b|doi\.org|©|\bCorresponding author\b'
+    r'|[a-z]- [a-z]')
+
+
+def _has_extraction_anomaly(units):
+    """High-precision signal that an extraction left obvious dirt inline —
+    an email/DOI/copyright line or mid-word hyphenation. Mainly catches the
+    no-GROBID heuristic path. It does NOT catch GROBID silently dropping body
+    text (empirically indistinguishable from correctly dropped captions), so
+    when='always' is the setting that also recovers those; 'auto' uses this.
+    """
+    return any(u["kind"] == "body" and _FURNITURE_RE.search(u["text"])
+               for u in units)
+
+
+def prepare_units(pdf_path, grobid_cfg=None, llm_cfg=None):
     """Extract and clean a paper. Returns (units, meta, warnings); units are
     {kind, text, rects, para_end, pause}. GROBID is the primary backend when
-    configured; the built-in heuristics are the fallback.
+    configured; the built-in heuristics are the fallback. With [llm] enabled,
+    an LLM reflow of the raw PDF text repairs extractions that drop or weld
+    body text, re-deriving read-along rectangles from the PDF's own word boxes.
 
     Raises ValueError for PDFs with no usable text (scanned/image-only).
     """
+    units, meta, warnings = _base_extract(pdf_path, grobid_cfg)
+    units = _maybe_reflow(pdf_path, units, llm_cfg, warnings)
+    return units, meta, warnings
+
+
+def _maybe_reflow(pdf_path, units, llm_cfg, warnings):
+    if not (llm_cfg and llm_cfg.get("enabled")):
+        return units
+    when = llm_cfg.get("when", "auto")
+    if when == "never":
+        return units
+    if when == "auto" and not _has_extraction_anomaly(units):
+        return units
+    try:
+        import llm as llm_mod
+        import reflow
+        runner = llm_mod.resolve(llm_cfg)
+        if not runner:
+            warnings.append("LLM reflow skipped: no runner available "
+                            "(install ollama/claude/codex or set [llm] api_key)")
+            return units
+        reflowed = reflow.reflow_document(pdf_path, llm_cfg)
+        body = [u for u in reflowed if u["kind"] == "body"]
+        if len(body) < 3:
+            warnings.append("LLM reflow returned too little; kept base extraction")
+            return units
+        # fidelity guard: reflowed sentences whose words don't map back to the
+        # PDF's own word boxes are text the model invented or summarized, not
+        # reflowed. Low coverage => the model diverged; keep base extraction.
+        coverage = sum(1 for u in body if u["rects"]) / len(body)
+        if coverage < 0.6:
+            warnings.append(f"LLM reflow low fidelity ({coverage:.0%} of "
+                            f"sentences map to the PDF); kept base extraction")
+            return units
+        warnings.append(f"LLM reflow applied via {runner}")
+        return reflowed
+    except Exception as e:
+        warnings.append(f"LLM reflow failed ({type(e).__name__}: {e}); "
+                        f"kept base extraction")
+        return units
+
+
+def _base_extract(pdf_path, grobid_cfg=None):
     if grobid_cfg and grobid_cfg.get("enabled"):
         import grobid
         try:
@@ -376,7 +438,7 @@ def write_viewer(out_dir, manifest):
 
 
 def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
-                       grobid_cfg=None, tts_cfg=None):
+                       grobid_cfg=None, tts_cfg=None, llm_cfg=None):
     """Full pipeline: PDF -> readalong bundle in out_dir. Returns summary
     dict. progress(fraction, label) covers the whole pipeline: synthesis
     (with encoding overlapped) maps to 0-0.95, then pages/manifest — so the
@@ -384,7 +446,7 @@ def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
     def unit_cb(i, n, text):
         progress(0.95 * i / n, text)
 
-    units, meta, warnings = prepare_units(pdf_path, grobid_cfg)
+    units, meta, warnings = prepare_units(pdf_path, grobid_cfg, llm_cfg)
     tags = make_tags(pdf_path, meta)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "narration.mp3").unlink(missing_ok=True)  # pre-m4a leftover
@@ -438,8 +500,17 @@ def main():
                         help="with --gui: don't open a browser")
     parser.add_argument("--no-grobid", action="store_true",
                         help="skip GROBID; use the built-in extractor")
+    parser.add_argument("--llm", action="store_true",
+                        help="force LLM reflow on this run (as if [llm] "
+                             "enabled + when='always')")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="skip the LLM reflow even if [llm] is enabled")
     args = parser.parse_args()
     grobid_cfg = None if args.no_grobid else cfg["grobid"]
+    llm_cfg = None if args.no_llm else dict(cfg["llm"])
+    if args.llm and llm_cfg is not None:
+        llm_cfg["enabled"] = True
+        llm_cfg["when"] = "always"
 
     if args.gui:
         import server
@@ -447,7 +518,8 @@ def main():
                    speed=args.speed, dpi=args.dpi,
                    open_browser=cfg["gui"]["open"] and not args.no_open,
                    grobid_cfg=grobid_cfg, tts_cfg=cfg["tts"],
-                   idle_exit_min=cfg["gui"].get("idle_exit_min", 0))
+                   idle_exit_min=cfg["gui"].get("idle_exit_min", 0),
+                   llm_cfg=llm_cfg)
         return
 
     if args.pdf is None:
@@ -457,7 +529,7 @@ def main():
 
     if args.text_only:
         try:
-            units, _, warnings = prepare_units(args.pdf, grobid_cfg)
+            units, _, warnings = prepare_units(args.pdf, grobid_cfg, llm_cfg)
         except ValueError as e:
             sys.exit(f"error: {e}")
         for w in warnings:
@@ -486,7 +558,7 @@ def main():
                 info = generate_readalong(args.pdf, out_dir, args.voice,
                                           args.speed, args.dpi,
                                           grobid_cfg=grobid_cfg,
-                                          tts_cfg=cfg["tts"])
+                                          tts_cfg=cfg["tts"], llm_cfg=llm_cfg)
             except ValueError as e:
                 sys.exit(f"error: {e}")
             for w in info["warnings"]:
@@ -499,7 +571,7 @@ def main():
         return
 
     try:
-        units, meta, warnings = prepare_units(args.pdf, grobid_cfg)
+        units, meta, warnings = prepare_units(args.pdf, grobid_cfg, llm_cfg)
     except ValueError as e:
         sys.exit(f"error: {e}")
     for w in warnings:

@@ -44,6 +44,7 @@ nav:
   - Guides:
       - Library GUI: library.md
       - Zotero plugin: zotero.md
+      - LLM extraction repair: llm.md
       - Compute backends: backends.md
       - System voice (speechd): system-voice.md
   - Reference:

@@ -31,6 +31,42 @@ unload_after_s = 1800
 # Page image resolution for the read-along view, in DPI.
 dpi = 150
 
+[llm]
+# Optional LLM reflow of the raw PDF text. GROBID and the heuristic extractor
+# sometimes drop or weld body text that wraps around first-page footnotes and
+# column/page breaks; an LLM reading the raw text repairs that, and read-along
+# rectangles are re-derived from the PDF's own word boxes so highlighting still
+# works. Sentences whose words don't map back to the PDF are discarded, so the
+# model can't silently inject text.
+enabled = false
+# Which runner to use. "auto" prefers a local/free one, in this order:
+#   ollama (local Gemma on your GPU)  ->  claude (Claude Code, your Pro/Max
+#   subscription)  ->  codex (Codex CLI, your ChatGPT subscription)  ->  api.
+# The agent CLIs authenticate with your existing subscription — no API key and
+# no per-token billing. Force one with "ollama" | "claude" | "codex" | "api".
+runner = "auto"
+# When to reflow:
+#   "always" — every paper. The only setting that recovers text GROBID drops
+#              silently (that drop is empirically indistinguishable from a
+#              correctly dropped figure caption, so it can't be auto-detected).
+#              Costs one LLM call per paper: seconds on ollama/api, minutes on
+#              the Claude/Codex CLIs (they run a full agent turn).
+#   "auto"   — only when the extraction left obvious dirt (inline emails, DOI
+#              lines, hyphenation); cheap, mainly helps the no-GROBID path, but
+#              will miss silent GROBID drops.
+#   "never"  — disabled.
+when = "always"
+# Model id: an ollama model ("gemma3:12b", "gemma3:27b", ...) or an api model
+# id. Leave blank for the runner's default. The CLIs use their own logged-in
+# model regardless of this.
+model = ""
+timeout_s = 120
+# ollama_url = "http://127.0.0.1:11434"   # if ollama isn't on the default host
+# Only for runner = "api" (a raw key, billed per-use — the CLIs above don't
+# need this). provider is "anthropic" | "openai" | "gemini".
+# api_provider = "gemini"
+# api_key = ""
+
 [gui]
 # Port for `rhapsode --gui` (auto-probes upward if busy).
 port = 7717
