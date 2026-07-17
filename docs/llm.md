@@ -63,6 +63,23 @@ spot-checking with `--text-only`:
 ./rhapsode "paper.pdf" --text-only --llm     # see the LLM-extracted text
 ```
 
+## Limits
+
+Verified across a spread of papers, block-classification matches or beats
+GROBID on body text — clean reading order, no leaked captions, and it recovers
+passages GROBID drops. Two things to know:
+
+- **Metadata (title/authors) is best-effort.** The model can truncate a long
+  title or miss authors in a long list. In the Zotero flow this doesn't matter
+  (Zotero's metadata is authoritative); for direct PDFs, treat the tags as
+  approximate.
+- **Book-length documents fall back.** A single classification call suits
+  papers; a 400-page thesis exceeds any context window, so Rhapsode detects the
+  size and falls back to GROBID/heuristics automatically.
+
+Equation and table debris (garbled math glyphs, numeric table rows) is filtered
+out of the narration.
+
 ## Local Gemma via Ollama (recommended)
 
 ```bash

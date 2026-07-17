@@ -48,6 +48,14 @@ def test_parse_decision():
     assert d["order"] == [1, 2] and d["headings"] == [1]
 
 
+def test_narratable_filter():
+    assert reflow._narratable("A normal body sentence about the topic.")
+    assert reflow._narratable("See Fig. 3.")
+    assert not reflow._narratable(" =  x")          # garbled glyphs
+    assert not reflow._narratable("1.2 3.4 5.6 7.8 9.0 11.2 13.4")  # table row
+    assert reflow._narratable("The modulus was 18 GPa longitudinally.")
+
+
 def test_sentence_units_continuation():
     # a paragraph split across a break: first token run has no terminal punct
     toks = [("The", [(0, 0, 0, 1, 1)]), ("start", [(0, 2, 0, 3, 1)]),

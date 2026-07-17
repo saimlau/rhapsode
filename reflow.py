@@ -35,8 +35,9 @@ Decide which blocks are READABLE CONTENT to narrate — the title, the abstract,
 section/subsection headings, and body paragraphs — and which are FURNITURE to
 drop: journal/running headers and footers, author names and affiliations,
 the article-info / keywords / history box, corresponding-author footnotes,
-emails, DOI and copyright lines, page numbers, figure and table captions, and
-everything from References/Bibliography onward (including acknowledgements,
+emails, DOI and copyright lines, page numbers, figure and table captions,
+standalone mathematical equations, table content (cells, rows, numeric data),
+and everything from References/Bibliography onward (including acknowledgements,
 funding, author contributions, and the reference list).
 
 Return the content blocks in correct reading order (each page: left column
@@ -159,13 +160,35 @@ HEADING_PAUSE_S = 0.7
 PARAGRAPH_PAUSE_S = 0.5
 SENTENCE_PAUSE_S = 0.25
 
+# ~60k tokens of block summary; papers sit far under this, book-length
+# documents (theses) blow past it and fall back to the base extractor
+MAX_SUMMARY_CHARS = 250_000
+
+
+_PUA = re.compile("[\ue000-\uf8ff]")  # private-use area: garbled math glyphs
+
+
+def _narratable(text):
+    """False for equation/table debris that would narrate as noise: garbled
+    private-use glyphs, or a long span that is mostly non-letters (number
+    soup / table rows). Short clean fragments ("See Fig. 3.") still pass."""
+    if _PUA.search(text):
+        return False
+    stripped = text.replace(" ", "")
+    if len(stripped) < 3:
+        return False
+    letters = sum(c.isalpha() for c in stripped)
+    if len(stripped) > 15 and letters / len(stripped) < 0.4:
+        return False
+    return True
+
 
 def _sentence_units(tokens):
     units = []
     sents = _split_sentences(tokens)
     for j, sent in enumerate(sents):
         text = clean_text(" ".join(t[0] for t in sent))
-        if not text:
+        if not text or not _narratable(text):
             continue
         boxes = [b for t in sent for b in t[1]]
         last = j == len(sents) - 1
@@ -189,7 +212,15 @@ def extract_document(pdf_path, llm_cfg):
         raise llm.LLMError("no text blocks (scanned/image-only PDF?)")
     byid = {b["id"]: b for b in blocks}
 
-    decision = _parse_decision(llm.run(PROMPT + _compact(blocks), llm_cfg))
+    compact = _compact(blocks)
+    # single-call classification suits papers (~5-15k tokens); book-length
+    # documents (a 400-page thesis is ~330k tokens of block summary) exceed any
+    # context window, so bail early to the base extractor instead of burning a
+    # long timeout on a doomed call
+    if len(compact) > MAX_SUMMARY_CHARS:
+        raise llm.LLMError(f"document too large for single-call extraction "
+                           f"({doc.page_count} pages, {len(blocks)} blocks)")
+    decision = _parse_decision(llm.run(PROMPT + compact, llm_cfg))
     order = [i for i in decision.get("order", []) if i in byid]
     headings = {i for i in decision.get("headings", []) if i in byid}
     if not order:
