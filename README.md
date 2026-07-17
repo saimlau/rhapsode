@@ -98,16 +98,19 @@ python3 -m venv .venv
 Requires `ffmpeg` and `espeak-ng` on the system. First run downloads the
 ~330 MB Kokoro model from Hugging Face; after that it is fully offline.
 
-## 🤖 LLM extraction repair (optional)
+## 🤖 LLM extractor (optional)
 
 GROBID and the heuristics sometimes drop or weld body text that wraps around
-first-page footnotes and column/page breaks. An optional LLM pass reads the
-raw PDF text and reflows it into clean reading order, re-deriving read-along
-rectangles from the PDF's own word boxes (a sentence that can't be matched
-back is discarded, so text is never invented). It needs **no API key**: it
-drives a local Gemma model via Ollama, or the `claude`/`codex` agent CLIs on
-your existing subscription. Enable `[llm]` in config or force it per run with
-`--llm`. Voice stays Kokoro — see [the docs](https://saimailau.com/rhapsode/llm/).
+first-page footnotes and column/page breaks. An optional LLM extractor avoids
+this: PyMuPDF splits each page into blocks, the model sees only each block's
+location and first/last sentence and returns which blocks are body content and
+in what order, and Rhapsode emits the blocks' **own** text (nothing invented)
+with rectangles from their word boxes. It also reads title/authors/year from
+the front-matter blocks, so it can **replace GROBID entirely** — no Java. It
+needs **no API key**: it drives a local Gemma model via Ollama, or the
+`claude`/`codex` agent CLIs on your existing subscription. Enable `[llm]` in
+config or force it per run with `--llm`. Voice stays Kokoro — see
+[the docs](https://saimailau.com/rhapsode/llm/).
 
 ## 🔍 GROBID (primary extractor)
 

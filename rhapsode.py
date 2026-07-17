@@ -13,7 +13,6 @@ import argparse
 import gc
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -38,71 +37,43 @@ TTS_LOCK = threading.Lock()  # one inference at a time (worker + /tts
                              # endpoint) and all pipeline state transitions
 
 
-_FURNITURE_RE = re.compile(
-    r'\b[\w.+-]+@[\w.-]+\.\w+\b|doi\.org|©|\bCorresponding author\b'
-    r'|[a-z]- [a-z]')
-
-
-def _has_extraction_anomaly(units):
-    """High-precision signal that an extraction left obvious dirt inline —
-    an email/DOI/copyright line or mid-word hyphenation. Mainly catches the
-    no-GROBID heuristic path. It does NOT catch GROBID silently dropping body
-    text (empirically indistinguishable from correctly dropped captions), so
-    when='always' is the setting that also recovers those; 'auto' uses this.
-    """
-    return any(u["kind"] == "body" and _FURNITURE_RE.search(u["text"])
-               for u in units)
-
-
 def prepare_units(pdf_path, grobid_cfg=None, llm_cfg=None):
     """Extract and clean a paper. Returns (units, meta, warnings); units are
-    {kind, text, rects, para_end, pause}. GROBID is the primary backend when
-    configured; the built-in heuristics are the fallback. With [llm] enabled,
-    an LLM reflow of the raw PDF text repairs extractions that drop or weld
-    body text, re-deriving read-along rectangles from the PDF's own word boxes.
+    {kind, text, rects, para_end, pause}.
+
+    With [llm] enabled and a runner available, LLM block-classification is the
+    primary extractor: it reads each PDF block's location and first/last
+    sentence, keeps and orders the content blocks, and emits their own text
+    (so nothing is invented) with rectangles from the block word boxes. It
+    recovers body text GROBID drops around footnotes/column breaks. GROBID (or
+    the built-in heuristics) is the fallback when the LLM is off or fails.
 
     Raises ValueError for PDFs with no usable text (scanned/image-only).
     """
-    units, meta, warnings = _base_extract(pdf_path, grobid_cfg)
-    units = _maybe_reflow(pdf_path, units, llm_cfg, warnings)
-    return units, meta, warnings
-
-
-def _maybe_reflow(pdf_path, units, llm_cfg, warnings):
-    if not (llm_cfg and llm_cfg.get("enabled")):
-        return units
-    when = llm_cfg.get("when", "auto")
-    if when == "never":
-        return units
-    if when == "auto" and not _has_extraction_anomaly(units):
-        return units
-    try:
+    if llm_cfg and llm_cfg.get("enabled"):
         import llm as llm_mod
-        import reflow
         runner = llm_mod.resolve(llm_cfg)
-        if not runner:
-            warnings.append("LLM reflow skipped: no runner available "
-                            "(install ollama/claude/codex or set [llm] api_key)")
-            return units
-        reflowed = reflow.reflow_document(pdf_path, llm_cfg)
-        body = [u for u in reflowed if u["kind"] == "body"]
-        if len(body) < 3:
-            warnings.append("LLM reflow returned too little; kept base extraction")
-            return units
-        # fidelity guard: reflowed sentences whose words don't map back to the
-        # PDF's own word boxes are text the model invented or summarized, not
-        # reflowed. Low coverage => the model diverged; keep base extraction.
-        coverage = sum(1 for u in body if u["rects"]) / len(body)
-        if coverage < 0.6:
-            warnings.append(f"LLM reflow low fidelity ({coverage:.0%} of "
-                            f"sentences map to the PDF); kept base extraction")
-            return units
-        warnings.append(f"LLM reflow applied via {runner}")
-        return reflowed
-    except Exception as e:
-        warnings.append(f"LLM reflow failed ({type(e).__name__}: {e}); "
-                        f"kept base extraction")
-        return units
+        if runner:
+            try:
+                import reflow
+                units, meta = reflow.extract_document(pdf_path, llm_cfg)
+                body = [u for u in units if u["kind"] == "body"]
+                words = sum(len(u["text"].split()) for u in body)
+                if len(body) >= 3 and words >= 300:
+                    if meta.get("year") is None:
+                        from extraction import _page_year
+                        meta["year"] = _page_year(fitz.open(pdf_path)[0])
+                    return units, meta, [f"extracted via LLM ({runner})"]
+                fb = f"LLM extraction returned too little ({words} words); "
+            except Exception as e:
+                fb = f"LLM extraction failed ({type(e).__name__}: {e}); "
+        else:
+            fb = ("LLM enabled but no runner available (install ollama/claude/"
+                  "codex or set [llm] api_key); ")
+        units, meta, warnings = _base_extract(pdf_path, grobid_cfg)
+        return units, meta, [fb + "used base extractor"] + warnings
+
+    return _base_extract(pdf_path, grobid_cfg)
 
 
 def _base_extract(pdf_path, grobid_cfg=None):
@@ -501,16 +472,15 @@ def main():
     parser.add_argument("--no-grobid", action="store_true",
                         help="skip GROBID; use the built-in extractor")
     parser.add_argument("--llm", action="store_true",
-                        help="force LLM reflow on this run (as if [llm] "
-                             "enabled + when='always')")
+                        help="use the LLM block-classification extractor on "
+                             "this run (as if [llm] enabled)")
     parser.add_argument("--no-llm", action="store_true",
-                        help="skip the LLM reflow even if [llm] is enabled")
+                        help="skip the LLM extractor even if [llm] is enabled")
     args = parser.parse_args()
     grobid_cfg = None if args.no_grobid else cfg["grobid"]
     llm_cfg = None if args.no_llm else dict(cfg["llm"])
     if args.llm and llm_cfg is not None:
         llm_cfg["enabled"] = True
-        llm_cfg["when"] = "always"
 
     if args.gui:
         import server

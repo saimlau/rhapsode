@@ -13,7 +13,7 @@ DEFAULTS = {
             "backend": "local", "modal_endpoint": "",
             "modal_token_id": "", "modal_token_secret": ""},
     "render": {"dpi": 150},
-    "llm": {"enabled": False, "runner": "auto", "when": "always",
+    "llm": {"enabled": False, "runner": "auto",
             "model": "", "timeout_s": 120, "ollama_url": "",
             "api_provider": "", "api_key": ""},
     "gui": {"port": 7717, "open": True, "idle_exit_min": 0},
