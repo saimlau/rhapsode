@@ -63,22 +63,43 @@ spot-checking with `--text-only`:
 ./rhapsode "paper.pdf" --text-only --llm     # see the LLM-extracted text
 ```
 
-## Limits
+## Caching
+
+Classification results are cached on disk (default `~/.cache/rhapsode/llm`),
+keyed by paper content + runner + model, so **re-extracting a paper is
+instant** — regenerating, re-opening, or restarting the server never re-calls
+the model. Disable with `[llm] cache = false` or point it elsewhere with
+`cache_dir`.
+
+## Long documents
+
+A single classification call suits papers. Book-length documents (a 400-page
+thesis is ~330k tokens of block summary — beyond any context window) are split
+into **page-ordered windows that classify in parallel and stitch back
+together**, so a thesis extracts rather than falling back. Expect many model
+calls for such documents; with a local Ollama runner that's cheap, and the
+cache makes the second pass instant.
+
+## What it filters and how it gets metadata
+
+- **Metadata** (title, authors, year) comes from Rhapsode's tuned front-matter
+  parser, not the model — the classifier only sees each block's first/last
+  sentence and would truncate long titles or miss authors in long lists. In the
+  Zotero flow, Zotero's metadata wins regardless.
+- **Equation and table debris** (garbled math glyphs, numeric table rows) is
+  filtered out of the narration.
 
 Verified across a spread of papers, block-classification matches or beats
 GROBID on body text — clean reading order, no leaked captions, and it recovers
-passages GROBID drops. Two things to know:
+passages GROBID drops.
 
-- **Metadata (title/authors) is best-effort.** The model can truncate a long
-  title or miss authors in a long list. In the Zotero flow this doesn't matter
-  (Zotero's metadata is authoritative); for direct PDFs, treat the tags as
-  approximate.
-- **Book-length documents fall back.** A single classification call suits
-  papers; a 400-page thesis exceeds any context window, so Rhapsode detects the
-  size and falls back to GROBID/heuristics automatically.
+## A note on speed
 
-Equation and table debris (garbled math glyphs, numeric table rows) is filtered
-out of the narration.
+The 1–4 minutes you may see with the `claude`/`codex` runners is **agent-turn
+overhead in those CLIs, not model speed** — switching to a faster model there
+doesn't help. For fast extraction use `ollama` (local, seconds) or the `api`
+runner (a key, but seconds); the on-disk cache makes every repeat instant
+regardless.
 
 ## Local Gemma via Ollama (recommended)
 
