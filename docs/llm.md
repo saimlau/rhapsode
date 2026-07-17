@@ -97,9 +97,19 @@ passages GROBID drops.
 
 The 1–4 minutes you may see with the `claude`/`codex` runners is **agent-turn
 overhead in those CLIs, not model speed** — switching to a faster model there
-doesn't help. For fast extraction use `ollama` (local, seconds) or the `api`
-runner (a key, but seconds); the on-disk cache makes every repeat instant
-regardless.
+doesn't help. For fast extraction use `ollama` (local Gemma extracts a paper in
+**~10–20 s**) or the `api` runner (a key, but seconds); the on-disk cache makes
+every repeat instant regardless.
+
+Rhapsode handles the Ollama specifics for you: it talks to `/api/chat`, turns
+**thinking off** (Gemma 4's default reasoning mode otherwise returns empty
+output), sets a large enough `num_ctx`, uses constrained JSON decoding at
+temperature 0, and keeps the model warm between papers. Small local models
+classify unreliably over a whole paper's blocks at once, so the ollama runner
+splits a paper into a few small windows classified in parallel. A local 12B
+Gemma lands roughly 80–90 % as complete as a frontier model (it drops a bit
+more borderline caption/table text); for maximum fidelity use a larger local
+model or the `claude`/`api` runners.
 
 ## Local Gemma via Ollama (recommended)
 
