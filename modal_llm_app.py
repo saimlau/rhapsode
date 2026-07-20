@@ -35,7 +35,9 @@ import modal
 # A 12B model fits a single 24-40 GB GPU; the 26B MoE (google/gemma-4-26B-A4B-it)
 # needs an H200. Match this to [llm] model in config.toml.
 MODEL_NAME = "google/gemma-4-12B-it"   # note the capital B; ungated on HF
-GPU = "A100-40GB"
+# Unqualified "A100" lets Modal pick 40 or 80 GB; the max-model-len below is
+# sized for the 40 GB case, so either works. "H100" also fits and is faster.
+GPU = "A100"
 # The endpoint requires an OpenAI Bearer key (matches [llm] api_key) so
 # strangers who guess the URL can't spend your credits. The key is NOT stored
 # here — this file is tracked in a public repo. Put it in a Modal secret:
