@@ -34,9 +34,12 @@ import modal
 # needs an H200. Match this to [llm] model in config.toml.
 MODEL_NAME = "google/gemma-3-12b-it"
 GPU = "A100-40GB"
-# Set a token to require it as an OpenAI Bearer key (matches [llm] api_key), so
-# strangers who guess the URL can't spend your credits. Empty = open endpoint.
-API_KEY = ""
+# The endpoint requires an OpenAI Bearer key (matches [llm] api_key) so
+# strangers who guess the URL can't spend your credits. The key is NOT stored
+# here — this file is tracked in a public repo. Put it in a Modal secret:
+#     modal secret create rhapsode-llm-key VLLM_API_KEY=$(openssl rand -hex 24)
+# and use that same value for [llm] api_key in config.toml. If the secret is
+# missing the server starts unauthenticated, so create it before deploying.
 VLLM_PORT = 8000
 
 app = modal.App("rhapsode-llm")
@@ -64,14 +67,17 @@ hf_cache = modal.Volume.from_name("rhapsode-hf-cache", create_if_missing=True)
     # finds it can autoscale GPUs against your credits
     max_containers=2,
     volumes={"/root/.cache/huggingface": hf_cache},
-    secrets=[modal.Secret.from_name("huggingface")],
+    secrets=[modal.Secret.from_name("huggingface"),
+             modal.Secret.from_name("rhapsode-llm-key")],
 )
 # one vLLM server batches many requests; without this each HTTP request would
 # cold-start its own GPU container and reload the weights
 @modal.concurrent(max_inputs=32)
 @modal.web_server(VLLM_PORT, startup_timeout=10 * 60)
 def serve():
+    import os
     import subprocess
+    api_key = os.environ.get("VLLM_API_KEY", "")   # from the Modal secret
     cmd = ["vllm", "serve", MODEL_NAME,
            "--served-model-name", MODEL_NAME,
            "--host", "0.0.0.0", "--port", str(VLLM_PORT),
@@ -80,6 +86,9 @@ def serve():
            # binds the port. Cap it — a block-classification window is ~12k.
            "--max-model-len", "16384",
            "--gpu-memory-utilization", "0.90"]
-    if API_KEY:
-        cmd += ["--api-key", API_KEY]
+    if api_key:
+        cmd += ["--api-key", api_key]
+    else:
+        print("WARNING: no VLLM_API_KEY in the rhapsode-llm-key secret — "
+              "serving this endpoint UNAUTHENTICATED")
     subprocess.Popen(cmd)
