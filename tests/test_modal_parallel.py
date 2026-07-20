@@ -1,0 +1,129 @@
+"""Parallel TTS batching must be indistinguishable from serial.
+
+Audio is streamed into ffmpeg in order, so out-of-order *completion* must never
+become out-of-order *output*. The fake endpoint below answers later batches
+FASTEST, which reliably exposes any code that yields on completion order.
+"""
+
+import base64
+import os
+import sys
+import threading
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import numpy as np
+
+import rhapsode
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSession:
+    """Returns a distinct tone per unit; later batches return sooner."""
+
+    def __init__(self, order_log, delay_for=None):
+        self.order_log = order_log
+        self.delay_for = delay_for or (lambda texts: 0.0)
+        self.lock = threading.Lock()
+        self.max_inflight = 0
+        self._inflight = 0
+
+    def post(self, endpoint, headers=None, timeout=None, json=None):
+        with self.lock:
+            self._inflight += 1
+            self.max_inflight = max(self.max_inflight, self._inflight)
+        texts = json["texts"]
+        time.sleep(self.delay_for(texts))
+        with self.lock:
+            self._inflight -= 1
+            self.order_log.append(texts[0])
+        results = []
+        for t in texts:
+            # unit "N" -> N samples of value N, so any mis-ordering shows up
+            n = int(t)
+            pcm = np.full(n, n, dtype="<i2").tobytes()
+            results.append({"pcm_b64": base64.b64encode(pcm).decode(),
+                            "words": [{"w": t, "t0": 0.0, "t1": 1.0}]})
+        return _FakeResp({"sample_rate": 24000, "results": results})
+
+
+def _units(n):
+    return [{"text": str(i), "kind": "body", "rects": [], "para_end": False,
+             "pause": 0.0} for i in range(1, n + 1)]
+
+
+def _collect(units, session, **kw):
+    import requests
+    real = requests.Session
+    requests.Session = lambda: session
+    try:
+        cfg = {"modal_endpoint": "https://fake", "backend": "modal"}
+        return [(u["text"], w[0][0].copy())
+                for u, w in rhapsode._modal_unit_audio(units, "af_heart", 1.0,
+                                                       cfg, **kw)]
+    finally:
+        requests.Session = real
+
+
+def test_parallel_output_matches_serial_exactly():
+    units = _units(24)                      # 3 batches of 8
+    serial = _collect(units, _FakeSession([]), batch=8, lookahead=1)
+    # later batches finish FIRST — completion order is reversed
+    log = []
+    fast_last = _FakeSession(log, delay_for=lambda t: 0.30 / int(t[0]))
+    parallel = _collect(units, fast_last, batch=8, lookahead=4)
+
+    assert [t for t, _ in serial] == [t for t, _ in parallel]
+    for (ts, ws), (tp, wp) in zip(serial, parallel):
+        assert ts == tp
+        assert np.array_equal(ws, wp), f"audio differs for unit {ts}"
+    # the fake really did complete out of order (otherwise the test proves little)
+    assert log[0] != "1", f"expected a later batch to finish first, got {log}"
+
+
+def test_requests_actually_overlap():
+    units = _units(32)                      # 4 batches
+    s = _FakeSession([], delay_for=lambda t: 0.15)
+    _collect(units, s, batch=8, lookahead=4)
+    assert s.max_inflight > 1, "batches were not sent concurrently"
+
+
+def test_serial_when_lookahead_is_one():
+    units = _units(16)
+    s = _FakeSession([], delay_for=lambda t: 0.05)
+    _collect(units, s, batch=8, lookahead=1)
+    assert s.max_inflight == 1, "lookahead=1 must not overlap requests"
+
+
+def test_error_in_any_batch_propagates():
+    class Boom(_FakeSession):
+        def post(self, endpoint, headers=None, timeout=None, json=None):
+            if json["texts"][0] == "9":     # second batch
+                return _FakeResp({"error": "texts too long", "results": []})
+            return super().post(endpoint, headers=headers, timeout=timeout,
+                                json=json)
+    try:
+        _collect(_units(24), Boom([]), batch=8, lookahead=4)
+    except RuntimeError as e:
+        assert "texts too long" in str(e)
+    else:
+        raise AssertionError("a failing batch must raise")
+
+
+if __name__ == "__main__":
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            fn()
+            print(f"ok {name}")
+    print("all modal-parallel tests passed")

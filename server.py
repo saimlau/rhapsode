@@ -3,6 +3,7 @@ queue on a warm GPU model, and a podcast-style read-along playlist.
 Bound to 127.0.0.1 only."""
 
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -142,10 +143,46 @@ class Worker(threading.Thread):
         self.idle_exit_min = idle_exit_min or 0
         self.last_activity = time.time()
         self.q = queue.Queue()
+        self._prefetch = None   # (pid, Future): next paper extracted early
 
     def enqueue(self, pid):
         self.last_activity = time.time()
         self.q.put(pid)
+
+    def _prefetch_ok(self):
+        """Only overlap extraction with synthesis when synthesis is REMOTE.
+        With local Kokoro, extraction (which may drive a local LLM) would
+        contend with it for the same GPU — the way to cook a laptop."""
+        return (self.tts_cfg or {}).get("backend") == "modal"
+
+    def _start_prefetch(self):
+        """Pull the next queued paper forward and extract it in the
+        background. It stays 'pending' in the registry, so a restart re-queues
+        it normally and nothing is lost if we never get to it."""
+        if not self._prefetch_ok() or self._prefetch is not None:
+            return
+        try:
+            nxt = self.q.get_nowait()
+        except queue.Empty:
+            return
+        with self.lib.lock:
+            entry = self.lib.data["papers"].get(nxt)
+            if entry is None or entry["status"] != "pending":
+                return  # deleted or already handled; drop it like the main loop
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        fut = pool.submit(p2a.prepare_units, self.lib.pdf_path(nxt),
+                          self.grobid_cfg, self.llm_cfg)
+        fut.add_done_callback(lambda _f: pool.shutdown(wait=False))
+        self._prefetch = (nxt, fut)
+
+    def _take_prefetch(self, pid):
+        """The prepared extraction for pid, if we ran one. Errors are re-raised
+        here so a failed prefetch fails that paper, exactly as inline would."""
+        if not self._prefetch or self._prefetch[0] != pid:
+            return None
+        _, fut = self._prefetch
+        self._prefetch = None
+        return fut.result()
 
     def _idle_tick(self):
         p2a.maybe_idle_models(self.tts_cfg.get("park_after_s", 300),
@@ -199,11 +236,19 @@ class Worker(threading.Thread):
                                     progress=round(frac, 3), stage=label)
 
             try:
+                prepared = self._take_prefetch(pid)
+                if prepared is None:
+                    progress(0.0, "extracting text")
+                    prepared = p2a.prepare_units(self.lib.pdf_path(pid),
+                                                 self.grobid_cfg, self.llm_cfg)
+                # extraction for the NEXT paper runs while this one narrates,
+                # so neither remote container idles into a cold start
+                self._start_prefetch()
                 info = p2a.generate_readalong(
                     self.lib.pdf_path(pid), self.lib.view_dir(pid),
                     self.voice, self.speed, self.dpi, progress,
                     grobid_cfg=self.grobid_cfg, tts_cfg=self.tts_cfg,
-                    llm_cfg=self.llm_cfg)
+                    llm_cfg=self.llm_cfg, prepared=prepared)
                 fields = dict(status="ready", progress=1.0,
                               duration=round(info["duration"], 1),
                               warnings=info["warnings"])

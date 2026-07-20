@@ -264,12 +264,21 @@ def _local_unit_audio(units, voice, speed):
         yield unit, chunks
 
 
-def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8):
+def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
     """Yield the same shape as _local_unit_audio, synthesized on the user's
     own Modal deployment (modal_app.py). The identical Kokoro code runs
     there, so word timestamps are the same in kind — read-along sync does
-    not depend on where inference happens."""
+    not depend on where inference happens.
+
+    Up to `lookahead` batches are in flight at once (the endpoint declares
+    @modal.concurrent, so one warm container absorbs them), but results are
+    yielded strictly in order: audio streams into ffmpeg sequentially, so
+    out-of-order completion must never become out-of-order output. Keeping
+    requests dense also stops the container idling into a cold start between
+    batches. lookahead=1 restores fully serial behaviour."""
     import base64
+    from concurrent.futures import ThreadPoolExecutor
+
     import numpy as np
     import requests
 
@@ -286,8 +295,9 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8):
     headers = ({"Modal-Key": tok_id, "Modal-Secret": tok_secret}
                if tok_id else {})
     session = requests.Session()
-    for i in range(0, len(units), batch):
-        group = units[i:i + batch]
+    groups = [units[i:i + batch] for i in range(0, len(units), batch)]
+
+    def fetch(group):
         resp = session.post(endpoint, headers=headers, timeout=600,
                             json={"texts": [u["text"] for u in group],
                                   "voice": voice, "speed": speed})
@@ -299,10 +309,24 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8):
         if len(results) != len(group):
             raise RuntimeError(f"modal endpoint returned {len(results)} "
                                f"results for {len(group)} texts")
-        for unit, res in zip(group, results):
-            wave = (np.frombuffer(base64.b64decode(res["pcm_b64"]),
-                                  dtype="<i2").astype(np.float32) / 32767.0)
-            yield unit, [(wave, res.get("words") or [])]
+        return results
+
+    width = max(1, int(lookahead))
+    with ThreadPoolExecutor(max_workers=width) as pool:
+        pending = {}
+        submitted = 0
+        for idx, group in enumerate(groups):
+            while submitted < len(groups) and submitted < idx + width:
+                pending[submitted] = pool.submit(fetch, groups[submitted])
+                submitted += 1
+            # .result() on THIS index: blocks until the batch we owe next is
+            # done, regardless of which finished first — and re-raises its
+            # exception here, so a failing batch still aborts the paper
+            results = pending.pop(idx).result()
+            for unit, res in zip(group, results):
+                wave = (np.frombuffer(base64.b64decode(res["pcm_b64"]),
+                                      dtype="<i2").astype(np.float32) / 32767.0)
+                yield unit, [(wave, res.get("words") or [])]
 
 
 def synthesize(units, out_path, voice, speed, tags=None, progress=None,
@@ -438,7 +462,8 @@ def write_viewer(out_dir, manifest):
 
 
 def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
-                       grobid_cfg=None, tts_cfg=None, llm_cfg=None):
+                       grobid_cfg=None, tts_cfg=None, llm_cfg=None,
+                       prepared=None):
     """Full pipeline: PDF -> readalong bundle in out_dir. Returns summary
     dict. progress(fraction, label) covers the whole pipeline: synthesis
     (with encoding overlapped) maps to 0-0.95, then pages/manifest — so the
@@ -448,10 +473,14 @@ def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
 
     # Extraction reports nothing and can run for minutes (a remote model may
     # be cold-starting), so a bare 0 % is indistinguishable from a hang. Name
-    # the stage before it begins.
-    if progress:
-        progress(0.0, "extracting text")
-    units, meta, warnings = prepare_units(pdf_path, grobid_cfg, llm_cfg)
+    # the stage before it begins. `prepared` lets a caller supply an extraction
+    # it already ran (the server overlaps it with the previous paper's audio).
+    if prepared is not None:
+        units, meta, warnings = prepared
+    else:
+        if progress:
+            progress(0.0, "extracting text")
+        units, meta, warnings = prepare_units(pdf_path, grobid_cfg, llm_cfg)
     tags = make_tags(pdf_path, meta)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "narration.mp3").unlink(missing_ok=True)  # pre-m4a leftover
