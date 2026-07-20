@@ -50,7 +50,7 @@ enabled = true
 runner = "api"
 api_base_url = "https://<you>--rhapsode-llm-serve.modal.run/v1"
 api_key = "<your endpoint key>"
-model = "google/gemma-3-12b-it"
+model = "google/gemma-4-12B-it"
 ```
 
 Because the endpoint is OpenAI-compatible, no Modal-specific code is needed —

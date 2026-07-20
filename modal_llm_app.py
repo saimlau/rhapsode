@@ -9,9 +9,11 @@ local vLLM, OpenRouter, together.ai, etc.)
 Setup (one time):
     pip install modal
     modal setup
-    # Gemma is gated on Hugging Face: accept its license, then store a token:
-    modal secret create huggingface HF_TOKEN=hf_...
+    # the endpoint's bearer key (never stored in this file — it's public):
+    modal secret create rhapsode-llm-key VLLM_API_KEY=$(openssl rand -hex 24)
     modal deploy modal_llm_app.py        # prints the endpoint URL
+
+Gemma 4 is ungated, so no Hugging Face token or license acceptance is needed.
 
 config.toml:
     [llm]
@@ -19,11 +21,11 @@ config.toml:
     runner = "api"
     api_base_url = "https://<you>--rhapsode-llm-serve.modal.run/v1"
     api_key = "<the VLLM_API_KEY you put in the rhapsode-llm-key secret>"
-    model = "google/gemma-3-12b-it"           # must match MODEL_NAME
+    model = "google/gemma-4-12B-it"           # must match MODEL_NAME
 
-This is a TEMPLATE — verify MODEL_NAME (exact Hugging Face id, gated), GPU
-size, and the pinned versions for your model before deploying. It follows
-Modal's official example: https://modal.com/docs/examples/vllm_inference
+This is a TEMPLATE — verify MODEL_NAME (exact Hugging Face id), GPU size, and
+the pinned versions for your model before deploying. It follows Modal's
+official example: https://modal.com/docs/examples/vllm_inference
 """
 
 import modal
@@ -32,7 +34,7 @@ import modal
 # The Hugging Face model id (gated models need the `huggingface` secret above).
 # A 12B model fits a single 24-40 GB GPU; the 26B MoE (google/gemma-4-26B-A4B-it)
 # needs an H200. Match this to [llm] model in config.toml.
-MODEL_NAME = "google/gemma-3-12b-it"
+MODEL_NAME = "google/gemma-4-12B-it"   # note the capital B; ungated on HF
 GPU = "A100-40GB"
 # The endpoint requires an OpenAI Bearer key (matches [llm] api_key) so
 # strangers who guess the URL can't spend your credits. The key is NOT stored
@@ -67,8 +69,9 @@ hf_cache = modal.Volume.from_name("rhapsode-hf-cache", create_if_missing=True)
     # finds it can autoscale GPUs against your credits
     max_containers=2,
     volumes={"/root/.cache/huggingface": hf_cache},
-    secrets=[modal.Secret.from_name("huggingface"),
-             modal.Secret.from_name("rhapsode-llm-key")],
+    # Gemma 4 is ungated, so no HF token is needed. If you switch to a gated
+    # model, create a `huggingface` secret (HF_TOKEN=...) and add it here.
+    secrets=[modal.Secret.from_name("rhapsode-llm-key")],
 )
 # one vLLM server batches many requests; without this each HTTP request would
 # cold-start its own GPU container and reload the weights
