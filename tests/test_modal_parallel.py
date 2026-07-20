@@ -149,6 +149,59 @@ def test_abandoning_the_generator_does_not_block():
         requests.Session = real
 
 
+
+def test_oversized_unit_is_chunked_and_reassembled():
+    """A unit over the endpoint's 2000-char cap (e.g. a thesis TOC classified
+    as a heading) must be split into pieces, never exceed per-request limits,
+    and come back as ONE unit with concatenated audio and shifted timings."""
+    import rhapsode as rh
+    monster = " ".join(f"tok{i:03d}" for i in range(700))     # ~4900 chars
+    units = ([{"text": "small one.", "kind": "body", "rects": [],
+               "para_end": False, "pause": 0.0}]
+             + [{"text": monster, "kind": "heading", "rects": [],
+                 "para_end": False, "pause": 0.0}]
+             + [{"text": "small two.", "kind": "body", "rects": [],
+                 "para_end": False, "pause": 0.0}])
+
+    seen = {"max_texts": 0, "max_len": 0}
+    class Chunky(_FakeSession):
+        def post(self, endpoint, headers=None, timeout=None, json=None):
+            texts = json["texts"]
+            seen["max_texts"] = max(seen["max_texts"], len(texts))
+            seen["max_len"] = max(seen["max_len"], max(map(len, texts)))
+            results = []
+            for t in texts:
+                n = len(t)                      # samples == chars of the piece
+                pcm = np.full(n, 7, dtype="<i2").tobytes()
+                results.append({"pcm_b64": base64.b64encode(pcm).decode(),
+                                "words": [{"w": t[:8], "t0": 0.0,
+                                           "t1": n / 24000}]})
+            return _FakeResp({"sample_rate": 24000, "results": results})
+
+    import requests
+    real = requests.Session
+    requests.Session = lambda: Chunky([])
+    try:
+        out = list(rh._modal_unit_audio(units, "af_heart", 1.0,
+                                        {"modal_endpoint": "https://fake",
+                                         "backend": "modal"},
+                                        batch=4, lookahead=3))
+    finally:
+        requests.Session = real
+
+    assert seen["max_texts"] <= 4, "per-request text cap violated"
+    assert seen["max_len"] <= 1900, "a piece exceeded the endpoint char cap"
+    assert [u["text"][:8] for u, _ in out] == ["small on", " ".join(
+        f"tok{i:03d}" for i in range(2))[:8], "small tw"]
+    # the monster unit: one entry, audio length == total chars of its pieces
+    mu, mw = out[1]
+    wave, words = mw[0]
+    assert len(wave) > 4000, "merged audio must cover all pieces"
+    assert len(words) >= 3, "one word per piece expected"
+    t0s = [w["t0"] for w in words]
+    assert t0s == sorted(t0s) and t0s[1] > 0, "timings must shift cumulatively"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -297,20 +297,46 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
     session = requests.Session()
     groups = [units[i:i + batch] for i in range(0, len(units), batch)]
 
+    # The endpoint hard-rejects texts over 2000 chars, and no extractor can
+    # be trusted never to produce one (a thesis TOC classified as a heading,
+    # an appendix run). Enforce here, at the choke point: split an oversized
+    # unit at whitespace, synthesize the pieces, and stitch wave + word
+    # timings back into ONE unit so the manifest and read-along see nothing.
+    def _pieces(text, limit=1900):
+        out = []
+        while len(text) > limit:
+            cut = text.rfind(" ", limit // 2, limit)
+            cut = cut if cut > 0 else limit
+            out.append(text[:cut])
+            text = text[cut:].lstrip()
+        if text:
+            out.append(text)
+        return out or [""]
+
+    # flatten units -> pieces, then pack requests by PIECE count: the endpoint
+    # caps a request at `batch` texts, so a split unit's pieces count against
+    # the cap and may span requests; reassembly below is piece-order driven
+    flat = []                            # (unit_index, piece_text)
+    for ui, u in enumerate(units):
+        for piece in _pieces(u["text"]):
+            flat.append((ui, piece))
+    groups = [flat[i:i + batch] for i in range(0, len(flat), batch)]
+
     def fetch(group):
+        texts = [t for _, t in group]
         # (connect, read): a wedged container must not pin shutdown for ten
-        # minutes. A batch is 8 short sentences — seconds of GPU work.
+        # minutes. A request is a handful of short texts — seconds of GPU work.
         resp = session.post(endpoint, headers=headers, timeout=(10, 180),
-                            json={"texts": [u["text"] for u in group],
+                            json={"texts": texts,
                                   "voice": voice, "speed": speed})
         resp.raise_for_status()
         data = resp.json()
         if data.get("error"):  # endpoint reports 200 + {"error": ...}
             raise RuntimeError(f"modal endpoint error: {data['error']}")
         results = data.get("results") or []
-        if len(results) != len(group):
+        if len(results) != len(texts):
             raise RuntimeError(f"modal endpoint returned {len(results)} "
-                               f"results for {len(group)} texts")
+                               f"results for {len(texts)} texts")
         return results
 
     width = max(1, int(lookahead))
@@ -319,20 +345,41 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
     # interpreter exit on Ctrl+C until every in-flight POST returned.
     pool = ThreadPoolExecutor(max_workers=width)
     pending = {}
+
+    def _finish(ui, chunk):
+        """chunk = this unit's piece-results in order -> (unit, [(wave, words)])
+        with PCM concatenated and word timings shifted past earlier pieces."""
+        pcm_parts, words, offset = [], [], 0.0
+        for res in chunk:
+            raw = base64.b64decode(res["pcm_b64"])
+            pcm_parts.append(raw)
+            for w in (res.get("words") or []):
+                words.append({**w, "t0": round(w["t0"] + offset, 3),
+                              "t1": round(w["t1"] + offset, 3)})
+            offset += len(raw) / 2 / SAMPLE_RATE
+        wave = (np.frombuffer(b"".join(pcm_parts), dtype="<i2")
+                .astype(np.float32) / 32767.0)
+        return units[ui], [(wave, words)]
+
     try:
         submitted = 0
+        hold_ui, hold = None, []       # pieces accumulated for the open unit
         for idx, group in enumerate(groups):
             while submitted < len(groups) and submitted < idx + width:
                 pending[submitted] = pool.submit(fetch, groups[submitted])
                 submitted += 1
-            # .result() on THIS index: blocks until the batch we owe next is
+            # .result() on THIS index: blocks until the request we owe next is
             # done, regardless of which finished first — and re-raises its
-            # exception here, so a failing batch still aborts the paper
+            # exception here, so a failing request still aborts the paper
             results = pending.pop(idx).result()
-            for unit, res in zip(group, results):
-                wave = (np.frombuffer(base64.b64decode(res["pcm_b64"]),
-                                      dtype="<i2").astype(np.float32) / 32767.0)
-                yield unit, [(wave, res.get("words") or [])]
+            for (ui, _piece), res in zip(group, results):
+                if ui != hold_ui:
+                    if hold:
+                        yield _finish(hold_ui, hold)
+                    hold_ui, hold = ui, []
+                hold.append(res)
+        if hold:
+            yield _finish(hold_ui, hold)
     finally:
         # abandon doomed work instead of waiting on it: on an error, on
         # GeneratorExit, and on shutdown
