@@ -76,9 +76,12 @@ hf_cache = modal.Volume.from_name("rhapsode-hf-cache", create_if_missing=True)
     # finds it can autoscale GPUs against your credits
     max_containers=2,
     volumes={"/root/.cache/huggingface": hf_cache},
-    # Gemma 4 is ungated, so no HF token is needed. If you switch to a gated
-    # model, create a `huggingface` secret (HF_TOKEN=...) and add it here.
-    secrets=[modal.Secret.from_name("rhapsode-llm-key")],
+    # Gemma 4 is ungated, so the HF token is not needed for ACCESS — but
+    # anonymous Hub downloads are rate-limited, and a cold start with an empty
+    # volume pulls ~23 GiB. Keep the token for throughput (and for gated
+    # models if MODEL_NAME ever changes).
+    secrets=[modal.Secret.from_name("rhapsode-llm-key"),
+             modal.Secret.from_name("huggingface")],
 )
 # one vLLM server batches many requests; without this each HTTP request would
 # cold-start its own GPU container and reload the weights
