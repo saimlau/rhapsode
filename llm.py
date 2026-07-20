@@ -198,9 +198,17 @@ def _run_api(prompt, cfg, timeout, fmt=None):
     elif provider == "gemini":
         key = key or os.environ.get("GEMINI_API_KEY")
         model = cfg.get("model") or "gemini-2.5-flash"
+        payload = {"contents": [{"parts": [{"text": prompt}]}],
+                   "generationConfig": {"temperature": 0}}
+        if fmt is not None:
+            # JSON mode only — an unconstrained model answers with prose and
+            # the decision never parses. A full responseSchema is deliberately
+            # NOT sent: Gemini's schema dialect rejects union types like
+            # {"type": ["integer", "null"]}, and the prompt states the shape.
+            payload["generationConfig"]["responseMimeType"] = "application/json"
         req = urllib.request.Request(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key or ''}",
-            data=json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode(),
+            data=json.dumps(payload).encode(),
             headers={"content-type": "application/json"})
         parse = lambda d: "".join(
             p.get("text", "") for p in d["candidates"][0]["content"]["parts"])
