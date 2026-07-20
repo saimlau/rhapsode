@@ -283,39 +283,49 @@ def create_app(lib, worker):
             worker.enqueue(pid)
         return JSONResponse({"id": pid, "duplicate": False})
 
-    @app.post("/api/papers")
-    def add_paper(file: UploadFile):
-        return _ingest(file.filename, file.file.read(MAX_UPLOAD + 1))
-
-    @app.post("/api/papers/by-path")
-    def add_by_path(body: dict):
-        """Ingest a local PDF by absolute path (used by the Zotero plugin;
-        the server is localhost-only, so the caller is on this machine).
-        Optional `playlist` name: append the paper to it (created if new)."""
-        src = Path(str(body.get("path", ""))).expanduser()
-        if not src.is_file():
-            raise HTTPException(404, f"no such file: {src}")
-        resp = _ingest(src.name, src.read_bytes())
-        pid = json.loads(resp.body)["id"]
-
-        # Zotero's curated metadata is authoritative: apply it (also on
-        # duplicates, healing bad extracted titles) and lock it so the
-        # generation worker doesn't overwrite it later
+    def _apply_meta(pid, body):
+        """Curated (Zotero) metadata is authoritative: apply + lock it, and
+        optionally append to a named playlist. Returns plid or None."""
         fields = {k: body[k] for k in ("title", "authors") if body.get(k)}
         if body.get("year"):
             fields["year"] = int(body["year"])
         if fields:
             fields["meta_locked"] = True
             lib.update(pid, **fields)
-
         name = str(body.get("playlist", "")).strip()
-        if name:
-            plid = lib.playlist_by_name(name)
-            with lib.lock:
-                order = lib.data["playlists"][plid]["order"]
-                if pid not in order:
-                    order.append(pid)
-                    lib.save()
+        if not name:
+            return None
+        plid = lib.playlist_by_name(name)
+        with lib.lock:
+            order = lib.data["playlists"][plid]["order"]
+            if pid not in order:
+                order.append(pid)
+                lib.save()
+        return plid
+
+    @app.post("/api/papers")
+    def add_paper(file: UploadFile, title: str = Form(""),
+                  authors: str = Form(""), year: str = Form(""),
+                  playlist: str = Form("")):
+        resp = _ingest(file.filename, file.file.read(MAX_UPLOAD + 1))
+        pid = json.loads(resp.body)["id"]
+        plid = _apply_meta(pid, {"title": title, "authors": authors,
+                                 "year": year, "playlist": playlist})
+        if plid:
+            return JSONResponse({**json.loads(resp.body), "playlist": plid})
+        return resp
+
+    @app.post("/api/papers/by-path")
+    def add_by_path(body: dict):
+        """Ingest a local PDF by absolute path (used by the Zotero plugin
+        against a localhost server; remote plugins upload via /api/papers)."""
+        src = Path(str(body.get("path", ""))).expanduser()
+        if not src.is_file():
+            raise HTTPException(404, f"no such file: {src}")
+        resp = _ingest(src.name, src.read_bytes())
+        pid = json.loads(resp.body)["id"]
+        plid = _apply_meta(pid, body)
+        if plid:
             return JSONResponse({**json.loads(resp.body), "playlist": plid})
         return resp
 
