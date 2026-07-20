@@ -348,8 +348,13 @@ function render() {
     row.draggable = true;
     row.dataset.id = id;
     const pct = Math.round((p.progress || 0) * 100);
+    // during extraction the bar legitimately sits at 0 % for minutes (a remote
+    // model may be cold-starting), so name the stage rather than showing a
+    // bare 0 % that reads as "stuck"
+    const gen = pct > 0 ? `${p.stage || "working"} · ${pct}%`
+                        : (p.stage || "starting…");
     const status =
-      p.status === "generating" ? `<span class="pct">${pct}%</span>` :
+      p.status === "generating" ? `<span class="pct">${esc(gen)}</span>` :
       p.status === "pending"    ? `<span class="dur">queued</span>` :
       p.status === "ready"      ? `<span class="dur">${fmt(p.duration)}</span>` : "";
     row.innerHTML = `

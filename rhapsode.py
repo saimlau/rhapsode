@@ -444,8 +444,13 @@ def generate_readalong(pdf_path, out_dir, voice, speed, dpi, progress=None,
     (with encoding overlapped) maps to 0-0.95, then pages/manifest — so the
     bar doesn't sit at a false 100% during the post-synthesis stages."""
     def unit_cb(i, n, text):
-        progress(0.95 * i / n, text)
+        progress(0.95 * i / n, "narrating")
 
+    # Extraction reports nothing and can run for minutes (a remote model may
+    # be cold-starting), so a bare 0 % is indistinguishable from a hang. Name
+    # the stage before it begins.
+    if progress:
+        progress(0.0, "extracting text")
     units, meta, warnings = prepare_units(pdf_path, grobid_cfg, llm_cfg)
     tags = make_tags(pdf_path, meta)
     out_dir.mkdir(parents=True, exist_ok=True)

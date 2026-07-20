@@ -185,15 +185,18 @@ class Worker(threading.Thread):
                     continue  # deleted, or a duplicate queue entry
                 entry.update(status="generating", progress=0.0, error=None)
                 self.lib.save()
-            last = [0.0]
+            last = [0.0, ""]
 
-            def progress(frac, _label):
-                if frac - last[0] >= 0.02 or frac >= 1.0:
-                    last[0] = frac
+            def progress(frac, label):
+                # push on a stage CHANGE too, not just a 2 % move: extraction
+                # sits at 0 % for minutes, and that is exactly when the user
+                # most needs to be told what is happening
+                if frac - last[0] >= 0.02 or frac >= 1.0 or label != last[1]:
+                    last[0], last[1] = frac, label
                     # memory-only: SSE clients see it, disk doesn't —
                     # ~50 full-registry writes per paper served no one
                     self.lib.update(pid, persist=False,
-                                    progress=round(frac, 3))
+                                    progress=round(frac, 3), stage=label)
 
             try:
                 info = p2a.generate_readalong(
