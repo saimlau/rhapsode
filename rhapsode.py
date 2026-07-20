@@ -298,7 +298,9 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
     groups = [units[i:i + batch] for i in range(0, len(units), batch)]
 
     def fetch(group):
-        resp = session.post(endpoint, headers=headers, timeout=600,
+        # (connect, read): a wedged container must not pin shutdown for ten
+        # minutes. A batch is 8 short sentences — seconds of GPU work.
+        resp = session.post(endpoint, headers=headers, timeout=(10, 180),
                             json={"texts": [u["text"] for u in group],
                                   "voice": voice, "speed": speed})
         resp.raise_for_status()
@@ -312,8 +314,12 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
         return results
 
     width = max(1, int(lookahead))
-    with ThreadPoolExecutor(max_workers=width) as pool:
-        pending = {}
+    # NOT `with ThreadPoolExecutor(...)`: its __exit__ is shutdown(wait=True),
+    # which would block the error path, the abandoned-generator path, and
+    # interpreter exit on Ctrl+C until every in-flight POST returned.
+    pool = ThreadPoolExecutor(max_workers=width)
+    pending = {}
+    try:
         submitted = 0
         for idx, group in enumerate(groups):
             while submitted < len(groups) and submitted < idx + width:
@@ -327,6 +333,13 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
                 wave = (np.frombuffer(base64.b64decode(res["pcm_b64"]),
                                       dtype="<i2").astype(np.float32) / 32767.0)
                 yield unit, [(wave, res.get("words") or [])]
+    finally:
+        # abandon doomed work instead of waiting on it: on an error, on
+        # GeneratorExit, and on shutdown
+        for fut in pending.values():
+            fut.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
+        session.close()
 
 
 def synthesize(units, out_path, voice, speed, tags=None, progress=None,
@@ -408,6 +421,12 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
         proc.wait()
         raise RuntimeError(f"ffmpeg died during encode (rc={proc.returncode})")
     finally:
+        # close the producer here rather than whenever the traceback is
+        # dropped: for the remote backend that cancels in-flight batches at a
+        # known point on a known thread instead of stalling the worker
+        close = getattr(producer, "close", None)
+        if close:
+            close()
         if proc.poll() is None:
             proc.kill()
             proc.wait()

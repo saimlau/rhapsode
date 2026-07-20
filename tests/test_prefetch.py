@@ -110,6 +110,39 @@ def test_prefetch_actually_overlaps():
         server.p2a.prepare_units = real
 
 
+
+
+def test_worker_actually_processes_a_prefetched_paper():
+    """Integration: drive run(). A paper pulled forward by the prefetch must
+    still be generated — the unit tests above never exercised the real loop."""
+    lib, w = _worker()
+    for pid in ("p1", "p2", "p3"):
+        _add(lib, pid)
+        w.q.put(pid)
+    real_prep, real_gen = server.p2a.prepare_units, server.p2a.generate_readalong
+    server.p2a.prepare_units = lambda path, g, l: (["u"], {"title": "t",
+                                                           "authors": "a",
+                                                           "year": 2024}, [])
+    server.p2a.generate_readalong = lambda *a, **k: {
+        "duration": 1.0, "warnings": [], "title": "t", "authors": "a",
+        "year": 2024, "units": 1}
+    try:
+        t = threading.Thread(target=w.run, daemon=True)
+        t.start()
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            done = [p for p in lib.data["papers"].values()
+                    if p.get("status") == "ready"]
+            if len(done) == 3:
+                break
+            time.sleep(0.1)
+        statuses = {k: v.get("status") for k, v in lib.data["papers"].items()}
+        assert all(s == "ready" for s in statuses.values()), \
+            f"a paper was lost by the prefetch: {statuses}"
+    finally:
+        server.p2a.prepare_units, server.p2a.generate_readalong = real_prep, real_gen
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

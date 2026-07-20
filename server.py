@@ -208,17 +208,25 @@ class Worker(threading.Thread):
 
     def run(self):
         while True:
-            try:
-                pid = self.q.get(timeout=60)
-            except queue.Empty:
+            # a paper pulled forward by the prefetch is no longer in the queue,
+            # so it must be taken from the slot — otherwise it is extracted and
+            # then never generated, and the occupied slot disables all further
+            # prefetching
+            if self._prefetch is not None:
+                pid = self._prefetch[0]
+            else:
                 try:
-                    self._idle_tick()
-                except Exception as e:  # a failed flush/park must never
-                    print(f"idle tick failed: {e}")  # kill the only worker
-                continue
+                    pid = self.q.get(timeout=60)
+                except queue.Empty:
+                    try:
+                        self._idle_tick()
+                    except Exception as e:  # a failed flush/park must never
+                        print(f"idle tick failed: {e}")  # kill the only worker
+                    continue
             with self.lib.lock:
                 entry = self.lib.data["papers"].get(pid)
                 if entry is None or entry["status"] != "pending":
+                    self._prefetch = None  # drop it, or we spin on it forever
                     continue  # deleted, or a duplicate queue entry
                 entry.update(status="generating", progress=0.0, error=None)
                 self.lib.save()
@@ -258,6 +266,14 @@ class Worker(threading.Thread):
                     fields.update(title=info["title"], authors=info["authors"],
                                   year=info["year"])
                 self.lib.update(pid, **fields)
+            except RuntimeError as e:
+                # an interpreter shutting down makes pool.submit raise; that is
+                # an artifact of exiting, not a bad paper — leave it 'generating'
+                # so crash recovery re-queues it instead of failing it forever
+                if "cannot schedule new futures" in str(e):
+                    print("shutdown during generation; paper will resume")
+                    return
+                raise
             except Exception as e:  # keep the queue alive on any failure
                 self.lib.update(pid, status="error", error=str(e))
             finally:

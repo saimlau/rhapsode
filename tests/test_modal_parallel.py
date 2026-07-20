@@ -38,6 +38,10 @@ class _FakeSession:
         self.lock = threading.Lock()
         self.max_inflight = 0
         self._inflight = 0
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def post(self, endpoint, headers=None, timeout=None, json=None):
         with self.lock:
@@ -119,6 +123,30 @@ def test_error_in_any_batch_propagates():
         assert "texts too long" in str(e)
     else:
         raise AssertionError("a failing batch must raise")
+
+
+
+def test_abandoning_the_generator_does_not_block():
+    """A consumer that stops early (ffmpeg died, error) must not wait on the
+    in-flight batches — shutdown(wait=True) would stall the whole queue."""
+    units = _units(40)
+    s = _FakeSession([], delay_for=lambda t: 1.5)
+    import requests, time as _t
+    real = requests.Session
+    requests.Session = lambda: s
+    try:
+        gen = rhapsode._modal_unit_audio(units, "af_heart", 1.0,
+                                         {"modal_endpoint": "https://fake",
+                                          "backend": "modal"},
+                                         batch=8, lookahead=4)
+        next(gen)                     # first batch delivered; others in flight
+        t0 = _t.time()
+        gen.close()                   # abandon
+        took = _t.time() - t0
+        assert took < 0.5, f"teardown blocked on in-flight batches ({took:.2f}s)"
+        assert s.closed, "the session must be closed on teardown"
+    finally:
+        requests.Session = real
 
 
 if __name__ == "__main__":
