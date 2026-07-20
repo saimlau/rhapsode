@@ -571,7 +571,7 @@ def main():
                    open_browser=cfg["gui"]["open"] and not args.no_open,
                    grobid_cfg=grobid_cfg, tts_cfg=cfg["tts"],
                    idle_exit_min=cfg["gui"].get("idle_exit_min", 0),
-                   llm_cfg=llm_cfg)
+                   llm_cfg=llm_cfg, auth_cfg=cfg.get("auth"))
         return
 
     if args.pdf is None:

@@ -1,0 +1,190 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rhapsode</title>
+<style>
+:root {
+  --desk: #ECEAE6; --side: #E6E3DC; --ink: #2A2721; --muted: #8A857A;
+  --hairline: rgba(40, 33, 20, .14);
+  --marker: #F5B301; --marker-wash: rgba(245, 179, 1, .14);
+  --error: #A33F35;
+  --serif: "New York", "Iowan Old Style", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --desk: #1B1A18; --side: #22211E; --ink: #E6E2D8; --muted: #8E8A80;
+    --hairline: rgba(255, 250, 235, .13); --marker-wash: rgba(245, 179, 1, .10);
+    --error: #E09287;
+  }
+}
+* { box-sizing: border-box; scrollbar-width: thin; }
+body {
+  margin: 0; background: var(--desk); color: var(--ink);
+  font-family: var(--sans); line-height: 1.5;
+}
+.bar {
+  display: flex; align-items: baseline; gap: 1rem;
+  padding: .8rem clamp(1rem, 5vw, 3rem);
+  border-bottom: 1px solid var(--hairline);
+}
+.bar .mark { font-family: var(--serif); font-size: 1.05rem; }
+.bar nav { margin-left: auto; display: flex; gap: 1.1rem; align-items: baseline; }
+.bar a, .bar button {
+  font-family: var(--mono); font-size: .74rem; letter-spacing: .08em;
+  color: var(--muted); text-decoration: none; background: none; border: 0;
+  padding: 0; cursor: pointer;
+}
+.bar a:hover, .bar button:hover { color: var(--ink); }
+main { max-width: 54rem; margin: 0 auto; padding: clamp(1.5rem, 5vw, 3rem); }
+
+/* the hero states the library as a sentence, not a stat card */
+.lede {
+  font-family: var(--serif); font-size: clamp(1.5rem, 4.2vw, 2.3rem);
+  line-height: 1.25; margin: 0 0 .4rem; font-weight: 500;
+  letter-spacing: -.01em;
+}
+.lede b { font-weight: 500; box-shadow: inset 0 -.36em 0 var(--marker-wash); }
+.sub { color: var(--muted); font-family: var(--mono); font-size: .78rem;
+       margin: 0 0 2.6rem; }
+
+h2 {
+  font-family: var(--mono); font-size: .7rem; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--muted); font-weight: 500;
+  margin: 2.4rem 0 .8rem; padding-bottom: .4rem;
+  border-bottom: 1px solid var(--hairline);
+}
+h2:first-of-type { margin-top: 0; }
+
+/* SIGNATURE: the title itself fills with the highlighter as it is narrated —
+   the same gesture the reader uses to track the spoken sentence */
+.making { padding: .1rem 0 .4rem; }
+.making .t {
+  font-family: var(--serif); font-size: 1.12rem; position: relative;
+  display: inline; background-image: linear-gradient(var(--marker), var(--marker));
+  background-repeat: no-repeat; background-size: var(--fill, 0%) .85em;
+  background-position: 0 .72em; transition: background-size .6s ease;
+  padding: 0 .05em;
+}
+@media (prefers-reduced-motion: reduce) { .making .t { transition: none; } }
+.making .meta {
+  font-family: var(--mono); font-size: .76rem; color: var(--muted);
+  margin-top: .5rem; display: flex; gap: 1rem; flex-wrap: wrap;
+}
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows li {
+  display: flex; gap: .8rem; align-items: baseline;
+  padding: .42rem 0; border-bottom: 1px solid var(--hairline);
+}
+.rows li:last-child { border-bottom: 0; }
+.rows a { color: inherit; text-decoration: none; flex: 1;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rows a:hover { box-shadow: inset 0 -.7em 0 var(--marker-wash); }
+.rows .n { font-family: var(--mono); font-size: .74rem; color: var(--muted);
+           white-space: nowrap; }
+.kv { list-style: none; margin: 0; padding: 0;
+      font-family: var(--mono); font-size: .78rem; }
+.kv li { display: flex; gap: 1rem; padding: .3rem 0; }
+.kv .k { color: var(--muted); width: 7.5rem; flex: none; }
+.err { color: var(--error); }
+.empty { color: var(--muted); font-size: .86rem; font-style: italic; }
+</style>
+
+<div class="bar">
+  <span class="mark">Rhapsode</span>
+  <nav>
+    <a href="/">library</a>
+    <form method="post" action="/logout" style="display:inline">
+      <button type="submit">sign out</button>
+    </form>
+  </nav>
+</div>
+
+<main>
+  <p class="lede" id="lede">Reading the shelf…</p>
+  <p class="sub" id="sub"></p>
+
+  <h2>Making now</h2>
+  <div id="making"><p class="empty">Nothing in the queue. Drop a PDF in the
+    <a href="/">library</a> to start one.</p></div>
+
+  <h2>Pick up where you left off</h2>
+  <ul class="rows" id="resume"><li class="empty">Nothing started yet.</li></ul>
+
+  <h2>Recently finished</h2>
+  <ul class="rows" id="recent"></ul>
+
+  <h2 id="failedHead" hidden>Needs attention</h2>
+  <ul class="rows" id="failed" hidden></ul>
+
+  <h2>The machinery</h2>
+  <ul class="kv" id="machinery"></ul>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const clock = s => {
+  s = Math.max(0, Math.round(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
+};
+
+function render(d) {
+  const st = d.stats;
+  $("#lede").innerHTML = st.papers
+    ? `<b>${st.papers}</b> papers on the shelf, <b>${st.hours}</b> hours of narration.`
+    : "The shelf is empty.";
+  const bits = [];
+  if (st.by_status.ready) bits.push(`${st.by_status.ready} ready`);
+  if (d.queued) bits.push(`${d.queued} queued`);
+  if (st.by_status.error) bits.push(`${st.by_status.error} failed`);
+  $("#sub").textContent = bits.join(" · ");
+
+  const g = d.generating[0];
+  $("#making").innerHTML = g
+    ? `<div class="making">
+         <div class="t" style="--fill:${Math.round((g.progress || 0) * 100)}%">${esc(g.title)}</div>
+         <div class="meta"><span>${esc(g.stage || "starting")}</span>
+           <span>${Math.round((g.progress || 0) * 100)}%</span>
+           ${d.queued ? `<span>${d.queued} waiting</span>` : ""}</div>
+       </div>`
+    : `<p class="empty">Nothing generating.${d.queued ? ` ${d.queued} queued.` : ""}</p>`;
+
+  $("#resume").innerHTML = d.resume.length ? d.resume.map(r =>
+    `<li><a href="/view/${encodeURIComponent(r.id)}/index.html">${esc(r.title)}</a>
+       <span class="n">${clock(r.at)} / ${clock(r.duration)}</span></li>`).join("")
+    : `<li class="empty">Nothing started yet.</li>`;
+
+  $("#recent").innerHTML = d.recent.length ? d.recent.map(r =>
+    `<li><a href="/view/${encodeURIComponent(r.id)}/index.html">${esc(r.title)}</a></li>`
+  ).join("") : `<li class="empty">Nothing finished yet.</li>`;
+
+  const bad = d.failed.length;
+  $("#failedHead").hidden = !bad; $("#failed").hidden = !bad;
+  if (bad) $("#failed").innerHTML = d.failed.map(f =>
+    `<li><a href="/">${esc(f.title)}</a><span class="n err">${esc(f.error)}</span></li>`
+  ).join("");
+
+  const m = d.machinery;
+  $("#machinery").innerHTML = `
+    <li><span class="k">voice</span><span>${esc(m.voice)}</span></li>
+    <li><span class="k">extraction</span><span>${esc(m.extraction)}</span></li>
+    <li><span class="k">disk free</span><span>${m.free_gb ?? "?"} GB</span></li>`;
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/api/dashboard");
+    if (r.status === 401) { location.href = "/login"; return; }
+    render(await r.json());
+  } catch (e) { /* transient: the next tick retries */ }
+}
+tick();
+// poll only while the tab is visible: a background tab must not keep the
+// server's idle-exit clock alive forever
+setInterval(() => { if (!document.hidden) tick(); }, 4000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+</script>

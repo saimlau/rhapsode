@@ -22,6 +22,7 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
 
+import auth
 import rhapsode as p2a
 from extraction import clean_text, extract_segments
 
@@ -249,6 +250,10 @@ class Worker(threading.Thread):
                     progress(0.0, "extracting text")
                     prepared = p2a.prepare_units(self.lib.pdf_path(pid),
                                                  self.grobid_cfg, self.llm_cfg)
+                else:
+                    # extraction already happened in the background; say so
+                    # rather than showing a blank stage until the first unit
+                    progress(0.0, "starting narration")
                 # extraction for the NEXT paper runs while this one narrates,
                 # so neither remote container idles into a cold start
                 self._start_prefetch()
@@ -284,8 +289,10 @@ class Worker(threading.Thread):
                     grobid.touch()
 
 
-def create_app(lib, worker):
+def create_app(lib, worker, auth_cfg=None):
     app = FastAPI(title="Rhapsode")
+    auth_cfg = auth_cfg or {}
+    secret = auth.load_secret(lib.root)
 
     @app.middleware("http")
     async def _touch_activity(request, call_next):
@@ -294,6 +301,109 @@ def create_app(lib, worker):
         if not request.url.path.startswith("/api/events"):
             worker.last_activity = time.time()
         return await call_next(request)
+
+    @app.middleware("http")
+    async def _require_login(request, call_next):
+        """Session gate. Off entirely when no password is configured, so a
+        localhost install keeps working exactly as before."""
+        if not auth_cfg.get("password_hash"):
+            return await call_next(request)
+        path = request.url.path
+        if path in ("/login", "/logout") or path.startswith("/favicon"):
+            return await call_next(request)
+        if auth.valid(request.cookies.get(auth.COOKIE, ""), secret):
+            return await call_next(request)
+        # a browser gets the login page; an API caller gets a clean 401
+        if path.startswith("/api/") or path.startswith("/tts"):
+            return JSONResponse({"detail": "login required"}, status_code=401)
+        return Response(status_code=303, headers={"Location": "/login"})
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(bad: int = 0):
+        page = REPO / "login.html"
+        if not page.is_file():
+            return HTMLResponse("<p>login.html missing</p>", status_code=500)
+        html = page.read_text()
+        if not bad:
+            html = html.replace('<p class="bad">', '<p class="bad" hidden>')
+        return HTMLResponse(html)
+
+    @app.post("/login")
+    def login_submit(password: str = Form("")):
+        if not auth.verify_password(password,
+                                    auth_cfg.get("password_hash", "")):
+            # same page, same wording, no hint about which part was wrong
+            return Response(status_code=303, headers={"Location": "/login?bad=1"})
+        resp = Response(status_code=303, headers={"Location": "/dashboard"})
+        resp.set_cookie(auth.COOKIE, auth.issue(secret), httponly=True,
+                        secure=True, samesite="lax", max_age=auth.DEFAULT_TTL,
+                        path="/")
+        return resp
+
+    @app.post("/logout")
+    def logout():
+        resp = Response(status_code=303, headers={"Location": "/login"})
+        resp.delete_cookie(auth.COOKIE, path="/")
+        return resp
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    def dashboard_page():
+        page = REPO / "dashboard.html"
+        if not page.is_file():
+            return HTMLResponse("<p>dashboard.html missing</p>",
+                                status_code=500)
+        return HTMLResponse(page.read_text())
+
+    @app.get("/api/dashboard")
+    def dashboard_data():
+        snap = lib.snapshot()
+        papers = snap["papers"]
+        by_status = {}
+        hours = 0.0
+        for p in papers.values():
+            by_status[p.get("status", "?")] = by_status.get(p.get("status", "?"), 0) + 1
+            hours += (p.get("duration") or 0)
+        generating = [{"id": pid, "title": p.get("title"),
+                       "stage": p.get("stage"), "progress": p.get("progress")}
+                      for pid, p in papers.items()
+                      if p.get("status") == "generating"]
+        resume = sorted(
+            ({"id": pid, "title": p.get("title"), "at": p.get("resume_t"),
+              "duration": p.get("duration")}
+             for pid, p in papers.items()
+             if p.get("status") == "ready" and (p.get("resume_t") or 0) > 30),
+            key=lambda r: -(r["at"] or 0))[:5]
+        recent = [{"id": pid, "title": p.get("title")}
+                  for pid, p in sorted(papers.items(),
+                                       key=lambda kv: -(kv[1].get("added") or 0))
+                  if p.get("status") == "ready"][:5]
+        failed = [{"id": pid, "title": p.get("title"), "error": p.get("error")}
+                  for pid, p in papers.items() if p.get("status") == "error"]
+        try:
+            st = os.statvfs(lib.root)
+            free_gb = st.f_bavail * st.f_frsize / 1e9
+        except OSError:
+            free_gb = None
+        tts = (worker.tts_cfg or {})
+        llm = (worker.llm_cfg or {})
+        return {
+            "stats": {"papers": len(papers), "hours": round(hours / 3600, 1),
+                      "by_status": by_status},
+            "generating": generating, "queued": by_status.get("pending", 0),
+            "resume": resume, "recent": recent, "failed": failed,
+            # deliberately NOT pinged: a health check would wake a GPU
+            # container and bill for it. Report what is configured.
+            "machinery": {
+                "voice": f"Kokoro {worker.voice}"
+                         + (" on Modal" if tts.get("backend") == "modal"
+                            else " on this machine"),
+                "extraction": (f"{llm.get('model') or 'LLM'} via "
+                               f"{llm.get('runner')}") if llm.get("enabled")
+                              else ("GROBID" if (worker.grobid_cfg or {}).get("enabled")
+                                    else "built-in heuristics"),
+                "free_gb": round(free_gb, 1) if free_gb is not None else None,
+            },
+        }
 
     @app.get("/", response_class=HTMLResponse)
     def home():
@@ -606,7 +716,7 @@ def _free_port(start):
 
 
 def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
-        tts_cfg=None, idle_exit_min=0, llm_cfg=None):
+        tts_cfg=None, idle_exit_min=0, llm_cfg=None, auth_cfg=None):
     root = Path(root)
     if not root.exists() and not root.parent.exists():
         sys.exit(f"error: library location unavailable (is the volume "
@@ -640,7 +750,8 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     # never-ending SSE streams would make graceful shutdown wait forever
     # (Ctrl+C seemingly dead); force-close connections after a short grace
     try:
-        uvicorn.run(create_app(lib, worker), host="127.0.0.1", port=port,
+        uvicorn.run(create_app(lib, worker, auth_cfg), host="127.0.0.1",
+                    port=port,
                     log_level="warning", timeout_graceful_shutdown=3)
     finally:
         import grobid

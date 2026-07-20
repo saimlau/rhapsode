@@ -20,6 +20,7 @@ DEFAULTS = {
             "window_chars": 100000,
             "api_provider": "", "api_key": "", "api_base_url": "",
             "cache": True, "cache_dir": ""},
+    "auth": {"password_hash": ""},
     "gui": {"port": 7717, "open": True, "idle_exit_min": 0},
     "grobid": {"enabled": True, "url": "http://127.0.0.1:8070",
                "autostart": True, "home": None, "idle_stop_s": 600},
