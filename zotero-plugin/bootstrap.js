@@ -19,8 +19,17 @@ function getPort() {
   return 7717;
 }
 
+function serverUrl() {
+  const v = Zotero.Prefs.get("extensions.rhapsode.server_url", true) || "";
+  return String(v).trim().replace(/\/+$/, "");
+}
+function isRemote() { return !!serverUrl(); }
 function base() {
-  return "http://127.0.0.1:" + getPort();
+  return isRemote() ? serverUrl() : "http://127.0.0.1:" + getPort();
+}
+function authHeaders() {
+  const auth = Zotero.Prefs.get("extensions.rhapsode.server_auth", true) || "";
+  return auth ? { Authorization: "Basic " + btoa(String(auth)) } : {};
 }
 
 function repoPath() {
@@ -42,7 +51,8 @@ function repoPath() {
 
 async function serverAlive() {
   try {
-    await Zotero.HTTP.request("GET", base() + "/api/library", { timeout: 1500 });
+    await Zotero.HTTP.request("GET", base() + "/api/library",
+                              { timeout: 1500, headers: authHeaders() });
     return true;
   } catch (e) {
     return false;
@@ -50,6 +60,17 @@ async function serverAlive() {
 }
 
 async function ensureServer() {
+  if (isRemote()) {
+    try {
+      await Zotero.HTTP.request("GET", base() + "/api/library",
+        { timeout: 8000, headers: authHeaders() });
+      return;
+    } catch (e) {
+      throw new Error("Rhapsode server at " + base() + " is unreachable (" +
+        (e.status || e.message) + "). Check extensions.rhapsode.server_url" +
+        " and server_auth in the Config Editor.");
+    }
+  }
   if (await serverAlive()) return;
   const repo = repoPath();
   if (!repo) {
@@ -86,12 +107,28 @@ function itemMeta(item) {
 }
 
 async function sendItem(item, att, playlist) {
+  if (isRemote()) {
+    const path = att.getFilePath();
+    const bytes = await IOUtils.read(path);
+    const fd = new FormData();
+    fd.append("file", new File([bytes], PathUtils.filename(path),
+                               { type: "application/pdf" }));
+    const meta = itemMeta(item);           // existing helper
+    fd.append("title", meta.title || "");
+    fd.append("authors", meta.authors || "");
+    fd.append("year", meta.year ? String(meta.year) : "");
+    fd.append("playlist", playlist || "");
+    const r = await fetch(base() + "/api/papers",
+                          { method: "POST", body: fd, headers: authHeaders() });
+    if (!r.ok) throw new Error("upload failed: HTTP " + r.status);
+    return (await r.json()).id;
+  }
   const path = await att.getFilePathAsync();
   if (!path) return null;
   const body = { path, ...itemMeta(item) };
   if (playlist) body.playlist = playlist;
   const resp = await Zotero.HTTP.request("POST", base() + "/api/papers/by-path", {
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
     timeout: 120000,  // default 30 s is too tight for very large PDFs
   });
@@ -118,7 +155,7 @@ function collectionPath(col) {
 
 async function ensurePlaylist(name) {
   await Zotero.HTTP.request("POST", base() + "/api/playlists", {
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ name }),
     timeout: 30000,
   });
