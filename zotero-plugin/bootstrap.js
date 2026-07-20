@@ -27,6 +27,32 @@ function isRemote() { return !!serverUrl(); }
 function base() {
   return isRemote() ? serverUrl() : "http://127.0.0.1:" + getPort();
 }
+// Zotero's bootstrap scope is privileged JS, not a DOM window: FormData, File
+// and fetch are NOT defined here. Build the multipart body by hand and send it
+// through Zotero.HTTP.request, which every other call in this file already uses.
+const BOUNDARY = "----RhapsodeFormBoundary7MA4YWxkTrZu0gW";
+
+function multipartBody(fileBytes, filename, fields) {
+  const enc = new TextEncoder();          // UTF-8: titles/authors aren't ASCII
+  const chunks = [];
+  for (const [name, value] of Object.entries(fields)) {
+    chunks.push(enc.encode(
+      `--${BOUNDARY}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n`
+      + `${value}\r\n`));
+  }
+  chunks.push(enc.encode(
+    `--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; `
+    + `filename="${filename.replace(/"/g, "")}"\r\n`
+    + `Content-Type: application/pdf\r\n\r\n`));
+  chunks.push(fileBytes);
+  chunks.push(enc.encode(`\r\n--${BOUNDARY}--\r\n`));
+
+  const body = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const c of chunks) { body.set(c, at); at += c.length; }
+  return body;
+}
+
 function authHeaders() {
   const auth = Zotero.Prefs.get("extensions.rhapsode.server_auth", true) || "";
   return auth ? { Authorization: "Basic " + btoa(String(auth)) } : {};
@@ -109,19 +135,18 @@ function itemMeta(item) {
 async function sendItem(item, att, playlist) {
   if (isRemote()) {
     const path = att.getFilePath();
-    const bytes = await IOUtils.read(path);
-    const fd = new FormData();
-    fd.append("file", new File([bytes], PathUtils.filename(path),
-                               { type: "application/pdf" }));
-    const meta = itemMeta(item);           // existing helper
-    fd.append("title", meta.title || "");
-    fd.append("authors", meta.authors || "");
-    fd.append("year", meta.year ? String(meta.year) : "");
-    fd.append("playlist", playlist || "");
-    const r = await fetch(base() + "/api/papers",
-                          { method: "POST", body: fd, headers: authHeaders() });
-    if (!r.ok) throw new Error("upload failed: HTTP " + r.status);
-    return (await r.json()).id;
+    if (!path) return null;          // same soft-skip as the local branch
+    const meta = itemMeta(item);
+    const resp = await Zotero.HTTP.request("POST", base() + "/api/papers", {
+      body: multipartBody(await IOUtils.read(path), PathUtils.filename(path), {
+        title: meta.title || "", authors: meta.authors || "",
+        year: meta.year ? String(meta.year) : "", playlist: playlist || "",
+      }),
+      headers: { ...authHeaders(),
+                 "Content-Type": "multipart/form-data; boundary=" + BOUNDARY },
+      responseType: "text", timeout: 300000,
+    });
+    return JSON.parse(resp.responseText).id;
   }
   const path = await att.getFilePathAsync();
   if (!path) return null;
