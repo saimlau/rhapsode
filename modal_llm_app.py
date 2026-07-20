@@ -65,6 +65,9 @@ vllm_image = (
 
 # persist weights across cold starts so scale-from-zero doesn't re-download
 hf_cache = modal.Volume.from_name("rhapsode-hf-cache", create_if_missing=True)
+# vLLM's torch.compile artifacts: without this, every cold start recompiles the
+# CUDA graphs (measured: ~48 s of "Compiling a graph for compile range")
+vllm_cache = modal.Volume.from_name("rhapsode-vllm-cache", create_if_missing=True)
 
 
 @app.function(
@@ -75,7 +78,8 @@ hf_cache = modal.Volume.from_name("rhapsode-hf-cache", create_if_missing=True)
     # a bare .modal.run URL is world-reachable: without a ceiling, anyone who
     # finds it can autoscale GPUs against your credits
     max_containers=2,
-    volumes={"/root/.cache/huggingface": hf_cache},
+    volumes={"/root/.cache/huggingface": hf_cache,
+             "/root/.cache/vllm": vllm_cache},
     # Gemma 4 is ungated, so the HF token is not needed for ACCESS — but
     # anonymous Hub downloads are rate-limited, and a cold start with an empty
     # volume pulls ~23 GiB. Keep the token for throughput (and for gated
