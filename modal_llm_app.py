@@ -18,7 +18,7 @@ config.toml:
     enabled = true
     runner = "api"
     api_base_url = "https://<you>--rhapsode-llm-serve.modal.run/v1"
-    api_key = "<the API_KEY you set below>"   # omit if API_KEY = ""
+    api_key = "<the VLLM_API_KEY you put in the rhapsode-llm-key secret>"
     model = "google/gemma-3-12b-it"           # must match MODEL_NAME
 
 This is a TEMPLATE — verify MODEL_NAME (exact Hugging Face id, gated), GPU
