@@ -35,8 +35,9 @@ import modal
 # A 12B model fits a single 24-40 GB GPU; the 26B MoE (google/gemma-4-26B-A4B-it)
 # needs an H200. Match this to [llm] model in config.toml.
 MODEL_NAME = "google/gemma-4-12B-it"   # note the capital B; ungated on HF
-# Unqualified "A100" lets Modal pick 40 or 80 GB; the max-model-len below is
-# sized for the 40 GB case, so either works. "H100" also fits and is faster.
+# ~24 GB of bf16 weights, so a 40 GB A100 is enough. Do NOT "upgrade" to
+# gemma-4-26B-A4B-it to save memory: its A4B is *compute*, not memory — all
+# 128 experts stay resident (48 GiB of weights) and it needs an 80 GB card.
 GPU = "A100"
 # The endpoint requires an OpenAI Bearer key (matches [llm] api_key) so
 # strangers who guess the URL can't spend your credits. The key is NOT stored
@@ -49,12 +50,16 @@ VLLM_PORT = 8000
 app = modal.App("rhapsode-llm")
 
 vllm_image = (
-    # matches Modal's currently-tested vLLM pairing; an older CUDA/vLLM/torch
-    # triple is the wrong thing to gamble a GPU deploy on
     modal.Image.from_registry("nvidia/cuda:12.9.0-devel-ubuntu22.04",
                               add_python="3.12")
     .entrypoint([])
-    .uv_pip_install("vllm==0.21.0", "huggingface_hub[hf_transfer]")
+    # vLLM >= 0.23.0 is REQUIRED for this model: gemma-4-12B-it is the
+    # encoder-free "Unified" variant (Gemma4UnifiedForConditionalGeneration),
+    # which was unregistered before 0.23.0 (PR #44429). On 0.21.x vLLM silently
+    # falls back to the transformers backend and dies with an o_proj shape
+    # mismatch. transformers>=5.5 is what Gemma 4 itself needs.
+    .uv_pip_install("vllm==0.25.1", "transformers>=5.5.0",
+                    "huggingface_hub[hf_transfer]")
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "HF_XET_HIGH_PERFORMANCE": "1"})
 )
 
