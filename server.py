@@ -571,4 +571,7 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     finally:
         import grobid
         grobid.stop()   # don't orphan a JVM we started
+        if llm_cfg:
+            import llm
+            llm.release(llm_cfg)  # nor leave a model pinning GPU memory
         lib.flush()     # persist debounced positions/progress

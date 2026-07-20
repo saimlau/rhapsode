@@ -223,6 +223,29 @@ def _cache_key(runner, prompt, cfg):
     return h.hexdigest()
 
 
+def release(cfg):
+    """Free a locally-hosted model's VRAM. No-op unless the ollama runner is
+    in use.
+
+    keep_alive deliberately holds the model resident between papers, but once
+    the server stops (or goes idle) nothing should be pinning GPU memory — a
+    12B model is ~8 GB, over half a 16 GB laptop GPU, and it keeps the card
+    from clocking down. Same reasoning as stopping the GROBID JVM on exit.
+    """
+    try:
+        if not cfg or resolve(cfg) != "ollama":
+            return False
+        model = cfg.get("model") or "gemma4:12b"
+        body = json.dumps({"model": model, "keep_alive": 0}).encode()
+        req = urllib.request.Request(_ollama_url(cfg) + "/api/generate",
+                                     data=body,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15):
+            return True
+    except (urllib.error.URLError, OSError, ValueError):
+        return False  # best-effort: never block shutdown on this
+
+
 def run(prompt, cfg, timeout=None, fmt=None):
     """Run prompt through the resolved runner; raise LLMError if none/failure.
 

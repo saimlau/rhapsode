@@ -32,7 +32,7 @@ GPU:
 
 | Runner | Uses | Notes |
 |---|---|---|
-| `ollama` | a local Gemma model on your GPU | free, private, fast — the recommended default |
+| `ollama` | a local Gemma model on your GPU | free, private, fast — the recommended default; the model is held warm between papers and released when the server stops |
 | `claude` | your Claude Pro/Max subscription (Claude Code) | no key; a call runs a full agent turn, so it's slower (a couple of minutes) |
 | `codex` | your ChatGPT Plus/Pro subscription (Codex CLI) | no key; same agent-turn overhead |
 | `api` | a raw API key (Anthropic / OpenAI / Gemini), or any OpenAI-compatible endpoint via `api_base_url` | pay-per-use / free tier; fastest, needs a key |
