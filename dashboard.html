@@ -24,79 +24,104 @@ body {
   margin: 0; background: var(--desk); color: var(--ink);
   font-family: var(--sans); line-height: 1.5;
 }
+a { color: inherit; }
+
 .bar {
-  display: flex; align-items: baseline; gap: 1rem;
-  padding: .8rem clamp(1rem, 5vw, 3rem);
-  border-bottom: 1px solid var(--hairline);
+  display: flex; align-items: baseline; gap: 1.2rem;
+  padding: .85rem clamp(1rem, 4vw, 2.5rem);
 }
-.bar .mark { font-family: var(--serif); font-size: 1.05rem; }
-.bar nav { margin-left: auto; display: flex; gap: 1.1rem; align-items: baseline; }
+.bar .mark { font-family: var(--serif); font-size: 1.1rem; }
+.bar nav { margin-left: auto; display: flex; gap: 1.2rem; align-items: baseline; }
 .bar a, .bar button {
-  font-family: var(--mono); font-size: .74rem; letter-spacing: .08em;
-  color: var(--muted); text-decoration: none; background: none; border: 0;
-  padding: 0; cursor: pointer;
+  font: 500 .8rem var(--sans); color: var(--muted); text-decoration: none;
+  background: none; border: 0; padding: 0; cursor: pointer;
 }
 .bar a:hover, .bar button:hover { color: var(--ink); }
-main { max-width: 54rem; margin: 0 auto; padding: clamp(1.5rem, 5vw, 3rem); }
+.bar .here { color: var(--ink);
+  box-shadow: inset 0 -6px 0 var(--marker-wash); }
 
-/* the hero states the library as a sentence, not a stat card */
+main {
+  max-width: 62rem; margin: 0 auto;
+  padding: clamp(.6rem, 3vw, 2rem) clamp(1rem, 4vw, 2.5rem) 3rem;
+}
+
 .lede {
-  font-family: var(--serif); font-size: clamp(1.5rem, 4.2vw, 2.3rem);
-  line-height: 1.25; margin: 0 0 .4rem; font-weight: 500;
-  letter-spacing: -.01em;
+  font-family: var(--serif); font-size: clamp(1.45rem, 3.6vw, 2.1rem);
+  line-height: 1.3; margin: .6rem 0 .3rem; font-weight: 500;
+  letter-spacing: -.01em; max-width: 34ch;
 }
 .lede b { font-weight: 500; box-shadow: inset 0 -.36em 0 var(--marker-wash); }
-.sub { color: var(--muted); font-family: var(--mono); font-size: .78rem;
-       margin: 0 0 2.6rem; }
+.sub { color: var(--muted); font-size: .84rem; margin: 0 0 1.8rem; }
 
-h2 {
-  font-family: var(--mono); font-size: .7rem; letter-spacing: .16em;
-  text-transform: uppercase; color: var(--muted); font-weight: 500;
-  margin: 2.4rem 0 .8rem; padding-bottom: .4rem;
-  border-bottom: 1px solid var(--hairline);
+.grid { display: grid; gap: 1rem; grid-template-columns: 1fr; }
+/* fr tracks size as minmax(auto, fr): one nowrap row would otherwise blow the
+   track out past main's edge instead of ellipsizing */
+.grid > *, .card, .rows li { min-width: 0; }
+@media (min-width: 860px) {
+  .grid { grid-template-columns: 1.55fr 1fr; align-items: start; }
+  .col { display: grid; gap: 1rem; }
 }
-h2:first-of-type { margin-top: 0; }
+@media (max-width: 859.9px) { .col { display: contents; } }
 
-/* SIGNATURE: the title itself fills with the highlighter as it is narrated —
-   the same gesture the reader uses to track the spoken sentence */
-.making { padding: .1rem 0 .4rem; }
+/* content lives on cards, the same surface as the library's sidebar */
+.card {
+  background: var(--side); border: 1px solid var(--hairline);
+  border-radius: 12px; padding: 1rem 1.15rem 1.1rem;
+}
+.card h2 {
+  margin: 0 0 .7rem; font: 600 .68rem var(--sans);
+  letter-spacing: .13em; text-transform: uppercase; color: var(--muted);
+}
+
+/* SIGNATURE: the generating paper's title fills with the same amber wash the
+   reader uses to track a spoken sentence */
+.card.making { border-left: 3px solid var(--marker); }
 .making .t {
-  font-family: var(--serif); font-size: 1.12rem; position: relative;
-  display: inline; background-image: linear-gradient(var(--marker), var(--marker));
-  background-repeat: no-repeat; background-size: var(--fill, 0%) .85em;
-  background-position: 0 .72em; transition: background-size .6s ease;
-  padding: 0 .05em;
+  font-family: var(--serif); font-size: 1.1rem; line-height: 1.5;
+  display: inline; background-image: linear-gradient(var(--marker-wash), var(--marker-wash)),
+    linear-gradient(var(--marker), var(--marker));
+  background-repeat: no-repeat, no-repeat;
+  background-size: 100% 100%, var(--fill, 0%) .22em;
+  background-position: 0 0, 0 100%;
+  transition: background-size .6s ease; border-radius: 2px;
+  padding: .05em .15em;
 }
 @media (prefers-reduced-motion: reduce) { .making .t { transition: none; } }
 .making .meta {
-  font-family: var(--mono); font-size: .76rem; color: var(--muted);
-  margin-top: .5rem; display: flex; gap: 1rem; flex-wrap: wrap;
+  font: .74rem var(--mono); color: var(--muted); margin-top: .6rem;
+  display: flex; gap: 1rem; flex-wrap: wrap;
 }
+.making .meta .pct { color: var(--marker); }
+
 .rows { list-style: none; margin: 0; padding: 0; }
-.rows li {
-  display: flex; gap: .8rem; align-items: baseline;
-  padding: .42rem 0; border-bottom: 1px solid var(--hairline);
+.rows li { display: flex; gap: .8rem; align-items: baseline; padding: .5rem 0; }
+.rows li + li { border-top: 1px solid var(--hairline); }
+.rows a {
+  text-decoration: none; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--serif); font-size: .95rem;
 }
-.rows li:last-child { border-bottom: 0; }
-.rows a { color: inherit; text-decoration: none; flex: 1;
-          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rows a:hover { box-shadow: inset 0 -.7em 0 var(--marker-wash); }
-.rows .n { font-family: var(--mono); font-size: .74rem; color: var(--muted);
-           white-space: nowrap; }
-.kv { list-style: none; margin: 0; padding: 0;
-      font-family: var(--mono); font-size: .78rem; }
-.kv li { display: flex; gap: 1rem; padding: .3rem 0; }
-.kv .k { color: var(--muted); width: 7.5rem; flex: none; }
-.err { color: var(--error); }
-.empty { color: var(--muted); font-size: .86rem; font-style: italic; }
+.rows a::before { content: "▸ "; color: var(--marker); font-size: .8em; }
+.rows a:hover { box-shadow: inset 0 -.65em 0 var(--marker-wash); }
+.rows .n { font: .72rem var(--mono); color: var(--muted); white-space: nowrap; }
+.rows .n.err { color: var(--error); overflow: hidden; text-overflow: ellipsis;
+               max-width: 12rem; }
+
+.kv { list-style: none; margin: 0; padding: 0; font-size: .84rem; }
+.kv li { display: flex; gap: .8rem; padding: .3rem 0; align-items: baseline; }
+.kv .k { color: var(--muted); width: 6.2rem; flex: none; font-size: .78rem; }
+.empty { color: var(--muted); font-size: .86rem; margin: 0; }
+.empty a { color: inherit; }
+:focus-visible { outline: 2px solid var(--marker); outline-offset: 2px; }
 </style>
 
 <div class="bar">
   <span class="mark">Rhapsode</span>
   <nav>
-    <a href="/">library</a>
+    <a class="here" href="/dashboard">Home</a>
+    <a href="/">Library</a>
     <form method="post" action="/logout" style="display:inline">
-      <button type="submit">sign out</button>
+      <button type="submit">Sign out</button>
     </form>
   </nav>
 </div>
@@ -105,21 +130,37 @@ h2:first-of-type { margin-top: 0; }
   <p class="lede" id="lede">Reading the shelf…</p>
   <p class="sub" id="sub"></p>
 
-  <h2>Making now</h2>
-  <div id="making"><p class="empty">Nothing in the queue. Drop a PDF in the
-    <a href="/">library</a> to start one.</p></div>
+  <div class="grid">
+    <div class="col">
+      <section class="card making" id="makingCard">
+        <h2>Making now</h2>
+        <div id="making"><p class="empty">Nothing in the queue. Drop a PDF in
+          the <a href="/">library</a> to start one.</p></div>
+      </section>
 
-  <h2>Pick up where you left off</h2>
-  <ul class="rows" id="resume"><li class="empty">Nothing started yet.</li></ul>
+      <section class="card">
+        <h2>Pick up where you left off</h2>
+        <ul class="rows" id="resume"><li class="empty">Nothing started yet.</li></ul>
+      </section>
 
-  <h2>Recently finished</h2>
-  <ul class="rows" id="recent"></ul>
+      <section class="card">
+        <h2>Recently finished</h2>
+        <ul class="rows" id="recent"><li class="empty">Nothing yet.</li></ul>
+      </section>
+    </div>
 
-  <h2 id="failedHead" hidden>Needs attention</h2>
-  <ul class="rows" id="failed" hidden></ul>
+    <div class="col">
+      <section class="card" id="failedCard" hidden>
+        <h2>Needs attention</h2>
+        <ul class="rows" id="failed"></ul>
+      </section>
 
-  <h2>The machinery</h2>
-  <ul class="kv" id="machinery"></ul>
+      <section class="card">
+        <h2>The machinery</h2>
+        <ul class="kv" id="machinery"></ul>
+      </section>
+    </div>
+  </div>
 </main>
 
 <script>
@@ -145,12 +186,10 @@ function render(d) {
 
   const g = d.generating[0];
   $("#making").innerHTML = g
-    ? `<div class="making">
-         <div class="t" style="--fill:${Math.round((g.progress || 0) * 100)}%">${esc(g.title)}</div>
-         <div class="meta"><span>${esc(g.stage || "starting")}</span>
-           <span>${Math.round((g.progress || 0) * 100)}%</span>
-           ${d.queued ? `<span>${d.queued} waiting</span>` : ""}</div>
-       </div>`
+    ? `<div class="t" style="--fill:${Math.round((g.progress || 0) * 100)}%">${esc(g.title)}</div>
+       <div class="meta"><span>${esc(g.stage || "starting")}</span>
+         <span class="pct">${Math.round((g.progress || 0) * 100)}%</span>
+         ${d.queued ? `<span>${d.queued} waiting</span>` : ""}</div>`
     : `<p class="empty">Nothing generating.${d.queued ? ` ${d.queued} queued.` : ""}</p>`;
 
   $("#resume").innerHTML = d.resume.length ? d.resume.map(r =>
@@ -160,12 +199,12 @@ function render(d) {
 
   $("#recent").innerHTML = d.recent.length ? d.recent.map(r =>
     `<li><a href="/view/${encodeURIComponent(r.id)}/index.html">${esc(r.title)}</a></li>`
-  ).join("") : `<li class="empty">Nothing finished yet.</li>`;
+  ).join("") : `<li class="empty">Nothing yet.</li>`;
 
   const bad = d.failed.length;
-  $("#failedHead").hidden = !bad; $("#failed").hidden = !bad;
+  $("#failedCard").hidden = !bad;
   if (bad) $("#failed").innerHTML = d.failed.map(f =>
-    `<li><a href="/">${esc(f.title)}</a><span class="n err">${esc(f.error)}</span></li>`
+    `<li><a href="/">${esc(f.title)}</a><span class="n err" title="${esc(f.error)}">${esc(f.error)}</span></li>`
   ).join("");
 
   const m = d.machinery;
