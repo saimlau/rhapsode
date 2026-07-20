@@ -277,10 +277,14 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8):
     if not endpoint:
         raise RuntimeError("[tts] backend='modal' but modal_endpoint is not "
                            "set in config.toml (deploy modal_app.py first)")
-    headers = {}
-    if tts_cfg.get("modal_token_id"):
-        headers = {"Modal-Key": tts_cfg["modal_token_id"],
-                   "Modal-Secret": tts_cfg.get("modal_token_secret", "")}
+    # Modal proxy auth needs BOTH halves; half a pair yields an opaque 401
+    tok_id = (tts_cfg.get("modal_token_id") or "").strip()
+    tok_secret = (tts_cfg.get("modal_token_secret") or "").strip()
+    if bool(tok_id) != bool(tok_secret):
+        raise RuntimeError("[tts] modal_token_id and modal_token_secret must "
+                           "both be set (Modal proxy auth needs the pair)")
+    headers = ({"Modal-Key": tok_id, "Modal-Secret": tok_secret}
+               if tok_id else {})
     session = requests.Session()
     for i in range(0, len(units), batch):
         group = units[i:i + batch]
@@ -288,7 +292,10 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8):
                             json={"texts": [u["text"] for u in group],
                                   "voice": voice, "speed": speed})
         resp.raise_for_status()
-        results = resp.json()["results"]
+        data = resp.json()
+        if data.get("error"):  # endpoint reports 200 + {"error": ...}
+            raise RuntimeError(f"modal endpoint error: {data['error']}")
+        results = data.get("results") or []
         if len(results) != len(group):
             raise RuntimeError(f"modal endpoint returned {len(results)} "
                                f"results for {len(group)} texts")

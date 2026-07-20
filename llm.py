@@ -59,7 +59,10 @@ def detect(cfg=None):
         out.append("claude")
     if shutil.which("codex"):
         out.append("codex")
-    if cfg.get("api_key") or os.environ.get("ANTHROPIC_API_KEY") \
+    # a custom endpoint is itself sufficient — a self-hosted vLLM/Modal server
+    # may need no key at all, and without this the runner silently never runs
+    if cfg.get("api_key") or cfg.get("api_base_url") \
+            or os.environ.get("ANTHROPIC_API_KEY") \
             or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY"):
         out.append("api")
     return out
@@ -172,10 +175,21 @@ def _run_api(prompt, cfg, timeout, fmt=None):
         key = key or os.environ.get("OPENAI_API_KEY")
         model = cfg.get("model") or "gpt-4o-mini"
         base = (cfg.get("api_base_url") or "https://api.openai.com/v1").rstrip("/")
+        if cfg.get("api_base_url"):
+            # a self-hosted endpoint can cold-start (loading a 12B model takes
+            # minutes) and Modal caps each HTTP hop at 150 s, answering with a
+            # 303 the client follows — the 120 s default dies before hop one
+            timeout = max(timeout or 0, 900)
         payload = {"model": model, "temperature": 0,
                    "messages": [{"role": "user", "content": prompt}]}
         if fmt is not None:
-            payload["response_format"] = {"type": "json_object"}
+            # self-hosted vLLM honours a full schema (guided decoding); plain
+            # OpenAI's strict json_schema mode would reject this schema shape,
+            # so it keeps the laxer JSON mode
+            payload["response_format"] = (
+                {"type": "json_schema",
+                 "json_schema": {"name": "decision", "schema": fmt}}
+                if cfg.get("api_base_url") else {"type": "json_object"})
         req = urllib.request.Request(
             base + "/chat/completions", data=json.dumps(payload).encode(),
             headers={"content-type": "application/json",

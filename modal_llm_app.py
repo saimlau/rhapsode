@@ -42,11 +42,13 @@ VLLM_PORT = 8000
 app = modal.App("rhapsode-llm")
 
 vllm_image = (
-    modal.Image.from_registry("nvidia/cuda:12.4.0-devel-ubuntu22.04",
+    # matches Modal's currently-tested vLLM pairing; an older CUDA/vLLM/torch
+    # triple is the wrong thing to gamble a GPU deploy on
+    modal.Image.from_registry("nvidia/cuda:12.9.0-devel-ubuntu22.04",
                               add_python="3.12")
     .entrypoint([])
-    .pip_install("vllm==0.9.0", "huggingface_hub[hf_transfer]")
-    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+    .uv_pip_install("vllm==0.21.0", "huggingface_hub[hf_transfer]")
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "HF_XET_HIGH_PERFORMANCE": "1"})
 )
 
 # persist weights across cold starts so scale-from-zero doesn't re-download
@@ -58,15 +60,26 @@ hf_cache = modal.Volume.from_name("rhapsode-hf-cache", create_if_missing=True)
     gpu=GPU,
     scaledown_window=5 * 60,   # scale to zero (cost $0) 5 min after last use
     timeout=60 * 60,
+    # a bare .modal.run URL is world-reachable: without a ceiling, anyone who
+    # finds it can autoscale GPUs against your credits
+    max_containers=2,
     volumes={"/root/.cache/huggingface": hf_cache},
     secrets=[modal.Secret.from_name("huggingface")],
 )
+# one vLLM server batches many requests; without this each HTTP request would
+# cold-start its own GPU container and reload the weights
+@modal.concurrent(max_inputs=32)
 @modal.web_server(VLLM_PORT, startup_timeout=10 * 60)
 def serve():
     import subprocess
     cmd = ["vllm", "serve", MODEL_NAME,
            "--served-model-name", MODEL_NAME,
-           "--host", "0.0.0.0", "--port", str(VLLM_PORT)]
+           "--host", "0.0.0.0", "--port", str(VLLM_PORT),
+           # Gemma advertises a 131k context; its KV cache will not fit beside
+           # 12B of bf16 weights on a 40 GB card, and vLLM exits before it ever
+           # binds the port. Cap it — a block-classification window is ~12k.
+           "--max-model-len", "16384",
+           "--gpu-memory-utilization", "0.90"]
     if API_KEY:
         cmd += ["--api-key", API_KEY]
     subprocess.Popen(cmd)

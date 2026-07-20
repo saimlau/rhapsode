@@ -9,8 +9,10 @@ Setup (one time):
     pip install modal
     modal setup                      # authenticate your Modal account
     modal deploy modal_app.py        # prints the endpoint URL
-    modal token new ...              # or create a proxy-auth token in the
-                                     # dashboard if you enable proxy auth
+    # With REQUIRES_PROXY_AUTH = True (the default below), create a proxy-auth
+    # token at https://modal.com/settings/proxy-auth-tokens — NOT
+    # `modal token new`, which mints ak-/as- CLI tokens and will 401 here.
+    # The pair (wk-.../ws-...) is sent as the Modal-Key / Modal-Secret headers.
 
 config.toml:
     [tts]
@@ -32,7 +34,7 @@ import modal
 
 # Set True to require Modal proxy-auth tokens on the endpoint (recommended
 # if you mind strangers who guess the URL spending your credits).
-REQUIRES_PROXY_AUTH = False
+REQUIRES_PROXY_AUTH = True
 
 app = modal.App("rhapsode-tts")
 
@@ -48,10 +50,17 @@ image = (
     .apt_install("espeak-ng")
     .pip_install("kokoro>=0.9", "soundfile", "numpy")
     .run_function(_bake_weights)
+    # @modal.fastapi_endpoint needs FastAPI in the image (Modal stopped adding
+    # it implicitly). Kept last on purpose: appending a layer reuses the cached
+    # weight-bake above instead of re-downloading ~330 MB of model weights.
+    .pip_install("fastapi[standard]")
 )
 
 
 @app.cls(image=image, gpu="T4", scaledown_window=120, timeout=600)
+# without this each container takes one request at a time, so every parallel
+# request cold-starts a fresh T4 and reloads the model
+@modal.concurrent(max_inputs=4)
 class KokoroTTS:
     @modal.enter()
     def load(self):
@@ -67,11 +76,18 @@ class KokoroTTS:
         voice = req.get("voice", "af_heart")
         speed = float(req.get("speed", 1.0))
         results = []
-        too_long = [i for i, t in enumerate(texts) if len(str(t)) > 5000]
+        # Modal enforces a hard 150 s HTTP timeout on web endpoints (timeout=
+        # above does NOT override it); past that it answers with a 303 that a
+        # POST cannot safely replay, so keep one request well inside the window
+        too_long = [i for i, t in enumerate(texts) if len(str(t)) > 2000]
         if too_long:
-            return {"error": f"texts {too_long} exceed 5000 chars — split "
+            return {"error": f"texts {too_long} exceed 2000 chars — split "
                              "them client-side", "results": []}
-        for text in texts[:64]:
+        if len(texts) > 8:
+            return {"error": "max 8 texts per request (Modal's 150 s "
+                             "web-endpoint timeout); send more batches",
+                    "results": []}
+        for text in texts[:8]:
             waves, words = [], []
             offset = 0.0
             for item in self.pipeline(str(text), voice=voice,
