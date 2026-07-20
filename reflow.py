@@ -136,13 +136,24 @@ def _is_abbrev(tok):
     return core in _ABBREV or (len(core) == 1) or core.replace(".", "").isdigit()
 
 
+SENTENCE_CHAR_LIMIT = 450   # matches extraction.split_sentences; the TTS
+                            # endpoint hard-rejects texts over 2000 chars
+
+
 def _split_sentences(tokens):
-    sents, cur = [], []
+    """Sentence runs, additionally split at SENTENCE_CHAR_LIMIT: a thesis
+    appendix or long list can form a 'sentence' thousands of chars long,
+    which the TTS endpoint rejects outright and local Kokoro chokes on."""
+    sents, cur, cur_len = [], [], 0
     for tok in tokens:
+        if cur and cur_len + len(tok[0]) + 1 > SENTENCE_CHAR_LIMIT:
+            sents.append(cur)
+            cur, cur_len = [], 0
         cur.append(tok)
+        cur_len += len(tok[0]) + 1
         if _SENT_END.search(tok[0]) and not _is_abbrev(tok[0]):
             sents.append(cur)
-            cur = []
+            cur, cur_len = [], 0
     if cur:
         sents.append(cur)
     return sents

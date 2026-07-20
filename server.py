@@ -302,16 +302,41 @@ def create_app(lib, worker, auth_cfg=None):
             worker.last_activity = time.time()
         return await call_next(request)
 
+    # scrypt is deliberately slow, so remember Basic headers that already
+    # verified — machine clients (the Zotero plugin) send one per request
+    _basic_ok = set()
+
+    def _basic_valid(header):
+        if not header.startswith("Basic "):
+            return False
+        import hashlib as _h
+        key = _h.sha256(header.encode()).hexdigest()
+        if key in _basic_ok:
+            return True
+        try:
+            import base64 as _b
+            _user, _, pw = _b.b64decode(header[6:]).decode().partition(":")
+        except Exception:
+            return False
+        if auth.verify_password(pw, auth_cfg.get("password_hash", "")):
+            _basic_ok.add(key)
+            return True
+        return False
+
     @app.middleware("http")
     async def _require_login(request, call_next):
         """Session gate. Off entirely when no password is configured, so a
-        localhost install keeps working exactly as before."""
+        localhost install keeps working exactly as before. Browsers carry the
+        session cookie; machine clients (Zotero plugin, speechd, curl) may
+        send HTTP Basic with the same password instead."""
         if not auth_cfg.get("password_hash"):
             return await call_next(request)
         path = request.url.path
         if path in ("/login", "/logout") or path.startswith("/favicon"):
             return await call_next(request)
         if auth.valid(request.cookies.get(auth.COOKIE, ""), secret):
+            return await call_next(request)
+        if _basic_valid(request.headers.get("authorization", "")):
             return await call_next(request)
         # a browser gets the login page; an API caller gets a clean 401
         if path.startswith("/api/") or path.startswith("/tts"):

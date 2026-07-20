@@ -66,6 +66,22 @@ def test_sentence_units_continuation():
     assert units[0]["para_end"] is True
 
 
+
+def test_split_sentences_caps_length():
+    """A 'sentence' with no terminal punctuation for thousands of chars (a
+    thesis appendix, a long list) must still split: the TTS endpoint rejects
+    texts over 2000 chars outright."""
+    toks = [(f"word{i:04d}", [i]) for i in range(400)]     # ~3600 chars, no '.'
+    sents = reflow._split_sentences(toks)
+    assert len(sents) > 1, "endless run must be split"
+    for sent in sents:
+        text = " ".join(t[0] for t in sent)
+        assert len(text) <= reflow.SENTENCE_CHAR_LIMIT + 20, len(text)
+    # and every token survives, in order
+    flat = [t[0] for sent in sents for t in sent]
+    assert flat == [t[0] for t in toks]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

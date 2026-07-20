@@ -64,6 +64,27 @@ def test_sessions_survive_restart_but_not_a_new_secret():
     assert not auth.valid(tok, auth.load_secret(root)), "new key ends sessions"
 
 
+
+
+def test_basic_header_accepted_by_middleware():
+    """Machine clients (the Zotero plugin) authenticate with HTTP Basic
+    against the same password; browsers use the session cookie."""
+    import base64, tempfile
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    import server
+    lib = server.Library(Path(tempfile.mkdtemp()))
+    w = server.Worker(lib, "af_heart", 1.0, 150)
+    app = server.create_app(lib, w, {"password_hash": auth.hash_password("pw")})
+    c = TestClient(app)
+    hdr = {"Authorization": "Basic " + base64.b64encode(b"any:pw").decode()}
+    bad = {"Authorization": "Basic " + base64.b64encode(b"any:nope").decode()}
+    assert c.get("/api/library").status_code == 401
+    assert c.get("/api/library", headers=bad).status_code == 401
+    assert c.get("/api/library", headers=hdr).status_code == 200
+    assert c.get("/api/library", headers=hdr).status_code == 200  # cached path
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

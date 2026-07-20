@@ -94,7 +94,13 @@ main {
 .making .meta .pct { color: var(--marker); }
 
 .rows { list-style: none; margin: 0; padding: 0; }
-.rows li { display: flex; gap: .8rem; align-items: baseline; padding: .5rem 0; }
+.rows li { display: flex; gap: .8rem; align-items: center; padding: .5rem 0; }
+/* first-page thumbnail: the file-explorer glance at what the paper IS */
+.rows img.pg {
+  width: 34px; height: 46px; object-fit: cover; object-position: top;
+  border: 1px solid var(--hairline); border-radius: 3px; flex: none;
+  background: var(--desk);
+}
 .rows li + li { border-top: 1px solid var(--hairline); }
 .rows a {
   text-decoration: none; flex: 1; min-width: 0;
@@ -192,13 +198,16 @@ function render(d) {
          ${d.queued ? `<span>${d.queued} waiting</span>` : ""}</div>`
     : `<p class="empty">Nothing generating.${d.queued ? ` ${d.queued} queued.` : ""}</p>`;
 
+  const thumb = id => `<img class="pg" loading="lazy" alt=""
+      src="/view/${encodeURIComponent(id)}/page-000.png"
+      onerror="this.remove()">`;
   $("#resume").innerHTML = d.resume.length ? d.resume.map(r =>
-    `<li><a href="/view/${encodeURIComponent(r.id)}/index.html">${esc(r.title)}</a>
+    `<li>${thumb(r.id)}<a href="/view/${encodeURIComponent(r.id)}/index.html">${esc(r.title)}</a>
        <span class="n">${clock(r.at)} / ${clock(r.duration)}</span></li>`).join("")
     : `<li class="empty">Nothing started yet.</li>`;
 
   $("#recent").innerHTML = d.recent.length ? d.recent.map(r =>
-    `<li><a href="/view/${encodeURIComponent(r.id)}/index.html">${esc(r.title)}</a></li>`
+    `<li>${thumb(r.id)}<a href="/view/${encodeURIComponent(r.id)}/index.html">${esc(r.title)}</a></li>`
   ).join("") : `<li class="empty">Nothing yet.</li>`;
 
   const bad = d.failed.length;
