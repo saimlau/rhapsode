@@ -34,20 +34,40 @@ class Library:
     def __init__(self, root):
         self.root = root
         self.file = root / "library.json"
+        self.bak = root / "library.json.bak"
         self.lock = threading.RLock()
         self.version = 1
         self._dirty = False
         self._last_save = 0.0
         self.data = {"papers": {}, "order": [], "playlists": {},
                      "settings": {"auto_advance": True}}
-        if self.file.is_file():
-            self.data.update(json.loads(self.file.read_text()))
+        # A registry lost or corrupted by an unclean shutdown takes playlists
+        # and playback positions with it, so fall back to the previous good
+        # copy. (is_file() is False for a corrupt entry too, hence the retry.)
+        for src in (self.file, self.bak):
+            try:
+                if src.is_file():
+                    self.data.update(json.loads(src.read_text()))
+                    if src is self.bak:
+                        print(f"warning: library.json unreadable — recovered "
+                              f"from {self.bak.name}")
+                    break
+            except (OSError, ValueError) as e:
+                print(f"warning: could not read {src.name} ({e})")
         self.data.setdefault("playlists", {})  # pre-playlist registries
 
     def save(self, bump=True):
         with self.lock:
             tmp = self.file.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.data, indent=1))
+            # retain the previous good copy under a different name: filesystem
+            # damage that takes out library.json (or its directory entry) then
+            # still leaves playlists and positions recoverable
+            try:
+                if self.file.is_file():
+                    shutil.copy2(self.file, self.bak)
+            except OSError:
+                pass  # a backup is best-effort; never block the save
             os.replace(tmp, self.file)
             self._dirty = False
             self._last_save = time.time()
