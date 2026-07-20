@@ -21,6 +21,9 @@ mkdir -p "$PROFILE/extensions"
 # remove any pre-rename install so the two IDs don't coexist
 rm -f "$PROFILE/extensions/paper2audio@saimai.lau" \
       "$PROFILE/extensions/paper2audio@saimai.lau.xpi"
+# and any released .xpi of THIS id — a packaged install and a source proxy
+# share the id, so leaving both would make which one loads undefined
+rm -f "$PROFILE/extensions/rhapsode@saimai.lau.xpi"
 printf '%s' "$PLUGIN_DIR" > "$PROFILE/extensions/rhapsode@saimai.lau"
 
 # Force Zotero to rescan extensions on next launch
