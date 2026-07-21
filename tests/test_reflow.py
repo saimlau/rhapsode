@@ -82,6 +82,37 @@ def test_split_sentences_caps_length():
     assert flat == [t[0] for t in toks]
 
 
+
+def test_dropcap_joins_the_word_it_begins():
+    """A journal drop cap is its own word, so Arzi et al. opened with
+    "R econstruction of large mandibular defects" — narrated exactly that
+    way. The cap is set far taller than the text it starts."""
+    words = [_w(0, 10, 100, 28, 128, "R"),          # 28 pt tall drop cap
+             _w(0, 30, 118, 90, 128, "econstruction"),   # 10 pt body text
+             _w(0, 92, 118, 110, 128, "of")]
+    toks = reflow._join_dropcap(reflow._tokens(words))
+    assert [t[0] for t in toks] == ["Reconstruction", "of"], toks
+    assert len(toks[0][1]) == 2, "both boxes kept, so highlighting still works"
+
+
+def test_ordinary_capital_is_not_glued_to_the_next_word():
+    """The guard that matters: "A common approach" must not become
+    "Acommon". Same shape as a drop cap, but the same size."""
+    words = [_w(0, 10, 118, 20, 128, "A"),
+             _w(0, 22, 118, 70, 128, "common"),
+             _w(0, 72, 118, 110, 128, "approach")]
+    toks = reflow._join_dropcap(reflow._tokens(words))
+    assert [t[0] for t in toks] == ["A", "common", "approach"]
+
+
+def test_dropcap_only_joins_a_lowercase_continuation():
+    """A tall capital before another capital is an initial, not a drop cap."""
+    words = [_w(0, 10, 100, 28, 128, "R"),
+             _w(0, 30, 118, 90, 128, "Smith")]
+    toks = reflow._join_dropcap(reflow._tokens(words))
+    assert [t[0] for t in toks] == ["R", "Smith"]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

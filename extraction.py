@@ -159,11 +159,16 @@ MATH_DOUBLE = r"([\U0001D400-\U0001D7FF])\1+"
 # Built as a char->char table rather than a regex callback: MappedText.sub
 # takes a template, and every fold here is exactly one char to one char, so a
 # translation preserves the char/bbox mapping for free.
+# Two blocks, same problem. Mathematical Alphanumeric Symbols holds 𝑥 and 𝛼;
+# Letterlike Symbols holds the strays a typesetter reaches for instead — ℎ
+# (PLANCK CONSTANT, used as an italic h), ℓ, ℝ, ℃. Both spell out as code
+# points otherwise: "E = (4ℎ2 + 12ℎ𝑘)" was read "four letter two one zero E
+# two plus twelve letter two one zero E...".
 MATH_ALPHANUMERIC = {
     chr(cp): unicodedata.normalize("NFKC", chr(cp))
-    for cp in range(0x1D400, 0x1D800)
+    for start, end in ((0x1D400, 0x1D800), (0x2100, 0x2150))
+    for cp in range(start, end)
     if unicodedata.normalize("NFKC", chr(cp)) != chr(cp)
-    and len(unicodedata.normalize("NFKC", chr(cp))) == 1
 }
 
 # Scripts that cannot appear in a paper this narrator can read, and in
@@ -190,7 +195,7 @@ def clean_mapped(mt):
     # A RING OPERATOR straight after a number is a mis-encoded degree
     # sign ("{0∘, 5∘, ... 30∘}", "± 0.65∘ relative"). espeak says
     # nothing for ∘ and "degrees" for °, so the angle silently vanished.
-    mt = mt.sub(r"(\d\s*)∘", "\\1°")
+    mt = mt.sub(r"(\d\s*)[∘◦]", "\\1°")
     mt = mt.sub(MATH_DOUBLE, r"\1")
     mt = mt.translate_chars(MATH_ALPHANUMERIC)
     mt = mt.sub(UNREADABLE_SCRIPTS, " ")

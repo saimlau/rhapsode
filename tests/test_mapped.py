@@ -138,4 +138,20 @@ assert "∘" in clean_text("a composition f ∘ g")   # ...only after a number
 assert clean_text("𝐾𝐾[𝑥𝑥, 𝑥𝑥′]") == "K[x, x prime]"
 assert clean_text("𝛼𝛼0 ∈ the set") == "α 0 in the set"
 
+
+# --- Letterlike Symbols: the block a typesetter reaches for when the maths
+# block has no italic h. ℎ is PLANCK CONSTANT used as a variable, and espeak
+# spelled it out — "E = (4ℎ2 + 12ℎ𝑘)" read as "four letter two one zero E
+# two plus twelve letter two one zero E letter one D four five eight".
+assert clean_text("E = (4ℎ2 + 12ℎ𝑘)") == "E = (4h2 + 12hk)"
+assert clean_text("a length ℓ and the set ℝ") == "a length l and the set R"
+assert clean_text("heated to 37℃") == "heated to 37°C"       # multi-char fold
+
+# WHITE BULLET is another mis-encoded degree sign ("±18◦in roll"), where the
+# angle was dropped from the sentence entirely: "plus or minus eighteen in
+# roll". Only after a number, so a real bullet survives.
+assert clean_text("±18◦in roll") == "±18°in roll"
+assert "•" in clean_text("AJVR • Vol 77 • No. 5")
+assert "◦" in clean_text("a ◦ used as a bullet")
+
 print("all MappedText tests passed")

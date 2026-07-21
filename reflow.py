@@ -36,7 +36,10 @@ section/subsection headings, and body paragraphs — and which are FURNITURE to
 drop: journal/running headers and footers, author names and affiliations,
 the article-info / keywords / history box, corresponding-author footnotes,
 emails, DOI and copyright lines, page numbers, figure and table captions,
-table content (cells, rows, numeric data), and everything from
+table content (cells, rows, numeric data), any document-delivery or
+interlibrary-loan cover sheet prepended to the file (library contact details,
+"thank you for using our service", photocopy/copyright notices — these come
+before the paper and are not part of it), and everything from
 References/Bibliography onward (including acknowledgements, funding, author
 contributions, and the reference list).
 
@@ -119,9 +122,13 @@ def _parse_decision(text):
     return json.loads(m.group(0))
 
 
+DROPCAP_RATIO = 1.6      # a drop cap is set this much taller than its text
+
+
 def _tokens(words):
     """(page,x0,y0,x1,y1,text) words -> [(text, [boxes])], de-hyphenating
-    line-break splits into one token that keeps both boxes for highlighting."""
+    line-break splits into one token that keeps both boxes for highlighting,
+    and rejoining a drop cap with the word it begins."""
     tokens = []
     pending = None
     for pg, x0, y0, x1, y1, wt in words:
@@ -138,6 +145,31 @@ def _tokens(words):
     if pending is not None:
         tokens.append(pending)
     return tokens
+
+
+def _join_dropcap(tokens):
+    """A journal drop cap is its own word, so the opening of the article reads
+    "R econstruction of large mandibular defects" — and is narrated that way.
+    Join it to the word it begins, but only when it is set far taller than
+    that word: an ordinary sentence starting "A common approach" must not
+    become "Acommon"."""
+    out = []
+    skip = False
+    for i, (text, boxes) in enumerate(tokens):
+        if skip:
+            skip = False
+            continue
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+        if (nxt and len(text) == 1 and text.isupper() and boxes and nxt[1]
+                and nxt[0][:1].islower()):
+            cap_h = boxes[0][4] - boxes[0][2]
+            word_h = nxt[1][0][4] - nxt[1][0][2]
+            if word_h > 0 and cap_h >= word_h * DROPCAP_RATIO:
+                out.append((text + nxt[0], boxes + nxt[1]))
+                skip = True
+                continue
+        out.append((text, boxes))
+    return out
 
 
 def _is_abbrev(tok):
@@ -280,7 +312,9 @@ def _narratable(text):
 
 def _sentence_units(tokens):
     units = []
-    sents = _split_sentences(tokens)
+    # after the classifier has joined neighbouring blocks: a drop cap is its
+    # own block, so it only meets the word it begins at paragraph assembly
+    sents = _split_sentences(_join_dropcap(tokens))
     for j, sent in enumerate(sents):
         text = clean_text(" ".join(t[0] for t in sent))
         if not text or not _narratable(text):
