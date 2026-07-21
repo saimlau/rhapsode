@@ -10,11 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://saimailau.com/rhapsode/troubleshooting/">
+        <link rel="canonical" href="https://saimailau.com/rhapsode/hosting/">
       
       
-        <link rel="prev" href="../configuration/">
+        <link rel="prev" href="../zotero/">
       
+      
+        <link rel="next" href="../llm/">
       
       
         
@@ -25,7 +27,7 @@
     
     
       
-        <title>Troubleshooting & FAQ - Rhapsode</title>
+        <title>Hosting on a server - Rhapsode</title>
       
     
     
@@ -76,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#troubleshooting-faq" class="md-skip">
+        <a href="#hosting-on-a-server" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +114,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Troubleshooting & FAQ
+              Hosting on a server
             
           </span>
         </div>
@@ -399,8 +401,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -411,11 +415,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
           <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
@@ -436,7 +440,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -507,10 +511,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../hosting/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hosting on a server
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -526,6 +557,103 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-you-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you need
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#https" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTPS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#logging-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging in
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#point-zotero-at-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Point Zotero at it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operating-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operating it
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -626,8 +754,6 @@
       
   
   
-    
-  
   
   
     
@@ -640,11 +766,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
@@ -665,7 +791,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -708,37 +834,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Troubleshooting & FAQ
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
         
   
   
@@ -754,81 +853,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#extraction" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Extraction
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#audio-playback" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Audio &amp; playback
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#library-server" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Library &amp; server
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#zotero-plugin" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Zotero plugin
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#still-stuck" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Still stuck?
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -868,10 +892,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#extraction" class="md-nav__link">
+  <a href="#what-you-need" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Extraction
+        What you need
       
     </span>
   </a>
@@ -879,10 +903,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#audio-playback" class="md-nav__link">
+  <a href="#install" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Audio &amp; playback
+        Install
       
     </span>
   </a>
@@ -890,10 +914,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#library-server" class="md-nav__link">
+  <a href="#run-it" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Library &amp; server
+        Run it
       
     </span>
   </a>
@@ -901,10 +925,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#zotero-plugin" class="md-nav__link">
+  <a href="#https" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Zotero plugin
+        HTTPS
       
     </span>
   </a>
@@ -912,10 +936,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#still-stuck" class="md-nav__link">
+  <a href="#logging-in" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Still stuck?
+        Logging in
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#point-zotero-at-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Point Zotero at it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operating-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operating it
       
     </span>
   </a>
@@ -939,7 +985,7 @@
 
 
   
-    <a href="https://github.com/saimlau/rhapsode/edit/main/docs/troubleshooting.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/saimlau/rhapsode/edit/main/docs/hosting.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -947,65 +993,150 @@
   
 
 
-<h1 id="troubleshooting-faq">Troubleshooting &amp; FAQ<a class="headerlink" href="#troubleshooting-faq" title="Permanent link">&para;</a></h1>
-<h2 id="extraction">Extraction<a class="headerlink" href="#extraction" title="Permanent link">&para;</a></h2>
-<p><strong>"error: no extractable text"</strong> — the PDF is scanned/image-only. Rhapsode
-has no OCR; run the PDF through OCR first (e.g. <code>ocrmypdf</code>) and retry.</p>
-<p><strong>Narration includes junk, or skips real content.</strong> Check what will be read
-before synthesizing:</p>
-<div class="highlight"><pre><span></span><code>./rhapsode<span class="w"> </span><span class="s2">&quot;paper.pdf&quot;</span><span class="w"> </span>--text-only
-</code></pre></div>
-<p>If GROBID mis-parses a particular paper, <code>--no-grobid</code> forces the built-in
-heuristic extractor for that run — the two make different mistakes.
-Heuristics were tuned on common two-column layouts and are ratio-based, so
-most publishers work, but always spot-check a new layout.</p>
-<p><strong>GROBID never becomes available.</strong> Two usual causes:</p>
+<h1 id="hosting-on-a-server">Hosting on a server<a class="headerlink" href="#hosting-on-a-server" title="Permanent link">&para;</a></h1>
+<p>Rhapsode normally runs on the machine you listen from. It can also run on a
+small server instead, so a paper keeps synthesizing while your laptop is
+closed and every device reaches the same library.</p>
+<p>The server does no synthesis itself. It extracts text, queues papers, and
+serves the read-along; the GPU work goes to <a href="../backends/">Modal</a>, which
+starts a container per batch and bills only while it runs. A €4/month VPS
+with 2 vCPU and no GPU is enough.</p>
+<div class="admonition note">
+<p class="admonition-title">One account, several devices</p>
+<p>This is single-tenant: one password, one shared library. Everyone who
+logs in sees the same papers. Per-user accounts and private shelves are
+not built yet.</p>
+</div>
+<h2 id="what-you-need">What you need<a class="headerlink" href="#what-you-need" title="Permanent link">&para;</a></h2>
 <ul>
-<li><em>Java too new.</em> The build fails with
-  <code>Unsupported class file major version 65</code> (or similar) — GROBID's Gradle
-  needs <strong>JDK ≤ 17</strong>. Use the bundled-JDK recipe in
-  <a href="../installation/#grobid-primary-extractor">Installation</a>; Rhapsode
-  automatically uses a <code>jdk/</code> subdir inside the GROBID home.</li>
-<li><em>Wrong <code>home</code>.</em> <code>[grobid] home</code> must point at the built source tree
-  (the directory containing <code>grobid-home/</code> and <code>grobid-service/</code>).</li>
+<li>A server with a public IP, 2 GB RAM, and room for the audio (roughly
+  40 MB per hour of narration)</li>
+<li>A domain you control, for HTTPS</li>
+<li>A <a href="https://modal.com">Modal</a> account for TTS and, optionally, LLM
+  extraction</li>
 </ul>
-<p><strong>GROBID is eating RAM.</strong> Its JVM holds 2–4 GB while running. Rhapsode
-stops a service it started after <code>[grobid] idle_stop_s</code> (default 10 min)
-and restarts it on demand — lower that if memory is tight.</p>
-<h2 id="audio-playback">Audio &amp; playback<a class="headerlink" href="#audio-playback" title="Permanent link">&para;</a></h2>
-<p><strong>Why is the read-along audio <code>.m4a</code> but the CLI output <code>.mp3</code>?</strong> MP3 is
-universal for podcast players, but VBR MP3 seeking drifts by seconds in
-browsers — fatal for word-level sync. The viewer therefore uses AAC/m4a,
-which seeks sample-accurately.</p>
-<p><strong>I pressed Ctrl+C mid-generation.</strong> Safe: the encoder is detached from
-terminal signals, the partial file is discarded, and the paper resumes
-cleanly on the next server start.</p>
-<h2 id="library-server">Library &amp; server<a class="headerlink" href="#library-server" title="Permanent link">&para;</a></h2>
-<p><strong>Where is my data?</strong> Everything lives under <code>[library] path</code>: imported
-PDFs, generated <code>.readalong</code> bundles, and <code>library.json</code> (positions,
-playlists, order). Back up that folder and you have everything.</p>
-<p><strong>Adding the same PDF twice?</strong> Detected by content hash — no duplicate.
-<strong>Regenerate</strong> (hover/right-click a card) re-runs extraction + synthesis
-in place, e.g. after changing voice or fixing GROBID.</p>
-<p><strong>The server exited by itself.</strong> That's <code>[gui] idle_exit_min</code> doing its
-job. Set it to <code>0</code> to disable, or pair it with
-<code>packaging/rhapsode.service</code> so the next request starts the server again.</p>
-<p><strong>What's using my GPU/RAM right now?</strong> <code>GET /api/status</code> reports model and
-GROBID residency; both idle away automatically
-(<a href="../configuration/#tts">lifecycle keys</a>).</p>
-<h2 id="zotero-plugin">Zotero plugin<a class="headerlink" href="#zotero-plugin" title="Permanent link">&para;</a></h2>
-<p><strong>Menu items missing / nothing happens.</strong> Enable <strong>Help → Debug Output
-Logging → View Output</strong> and look for <code>[rhapsode]</code> lines — they trace server
-discovery, uploads, and tab handling. After upgrading Rhapsode, restart the
-server so the plugin and server match. The old <em>paper2audio</em> plugin is
-removed automatically when the Rhapsode plugin first runs.</p>
-<p><strong>A collection times out.</strong> Metadata comes straight from Zotero and papers
-are queued in seconds; generation itself then runs one paper at a time in
-the background — watch progress in the library tab.</p>
-<h2 id="still-stuck">Still stuck?<a class="headerlink" href="#still-stuck" title="Permanent link">&para;</a></h2>
-<p><a href="https://github.com/saimlau/rhapsode/issues">Open an issue</a> with the paper
-(or its layout description), your platform, and the relevant terminal or
-<code>[rhapsode]</code> debug output.</p>
+<h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
+<p>Rhapsode needs no GPU libraries on the server, so skip torch and kokoro —
+they are what make the install large.</p>
+<div class="highlight"><pre><span></span><code>adduser<span class="w"> </span>--system<span class="w"> </span>--group<span class="w"> </span>--home<span class="w"> </span>/srv/rhapsode<span class="w"> </span>rhapsode
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/saimlau/rhapsode<span class="w"> </span>/opt/rhapsode
+<span class="nb">cd</span><span class="w"> </span>/opt/rhapsode
+python3<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.venv
+.venv/bin/pip<span class="w"> </span>install<span class="w"> </span>fastapi<span class="w"> </span>uvicorn<span class="w"> </span>requests<span class="w"> </span>pymupdf<span class="w"> </span>numpy<span class="w"> </span>python-multipart
+apt<span class="w"> </span>install<span class="w"> </span>ffmpeg<span class="w">          </span><span class="c1"># required: audio encoding</span>
+</code></pre></div>
+<p>Create <code>/opt/rhapsode/config.toml</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">[library]</span>
+<span class="n">root</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;/srv/rhapsode/library&quot;</span>
+
+<span class="k">[tts]</span>
+<span class="n">backend</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;modal&quot;</span>
+<span class="n">modal_endpoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://&lt;you&gt;--rhapsode-tts-kokorotts-tts.modal.run&quot;</span>
+<span class="n">modal_token_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;wk-...&quot;</span>
+<span class="n">modal_token_secret</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;ws-...&quot;</span>
+
+<span class="k">[llm]</span>
+<span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="n">runner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;api&quot;</span>
+<span class="n">api_base_url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://&lt;you&gt;--rhapsode-llm-serve.modal.run/v1&quot;</span>
+<span class="n">api_key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;...&quot;</span>
+<span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;google/gemma-4-12B-it&quot;</span>
+
+<span class="k">[auth]</span>
+<span class="n">password_hash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;scrypt$...&quot;</span>
+</code></pre></div>
+<p>The file holds credentials that spend money. Keep it private:</p>
+<div class="highlight"><pre><span></span><code>chown<span class="w"> </span>rhapsode:rhapsode<span class="w"> </span>/opt/rhapsode/config.toml
+chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>/opt/rhapsode/config.toml
+</code></pre></div>
+<p>Generate the password hash with:</p>
+<div class="highlight"><pre><span></span><code>.venv/bin/python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import auth; print(auth.hash_password(&#39;your password&#39;))&quot;</span>
+</code></pre></div>
+<p>Deploy the Modal apps from your own machine, once —
+<code>modal deploy modal_app.py</code> for TTS and <code>modal deploy modal_llm_app.py</code> for
+extraction. See <a href="../backends/">Compute backends</a>.</p>
+<h2 id="run-it">Run it<a class="headerlink" href="#run-it" title="Permanent link">&para;</a></h2>
+<p><code>/etc/systemd/system/rhapsode.service</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="k">[Unit]</span>
+<span class="na">Description</span><span class="o">=</span><span class="s">Rhapsode library server</span>
+<span class="na">After</span><span class="o">=</span><span class="s">network.target</span>
+
+<span class="k">[Service]</span>
+<span class="na">User</span><span class="o">=</span><span class="s">rhapsode</span>
+<span class="na">WorkingDirectory</span><span class="o">=</span><span class="s">/opt/rhapsode</span>
+<span class="na">Environment</span><span class="o">=</span><span class="s">PYTHONUNBUFFERED=1</span>
+<span class="na">ExecStart</span><span class="o">=</span><span class="s">/opt/rhapsode/.venv/bin/python rhapsode.py --gui --no-open</span>
+<span class="na">Restart</span><span class="o">=</span><span class="s">on-failure</span>
+
+<span class="k">[Install]</span>
+<span class="na">WantedBy</span><span class="o">=</span><span class="s">multi-user.target</span>
+</code></pre></div>
+<p><code>PYTHONUNBUFFERED=1</code> matters more than it looks: without it, progress lines
+sit in a pipe buffer and <code>journalctl</code> shows nothing while a paper generates.</p>
+<div class="highlight"><pre><span></span><code>systemctl<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>--now<span class="w"> </span>rhapsode
+</code></pre></div>
+<p>The server listens on <code>127.0.0.1:7717</code> — never expose it directly. It has no
+TLS, and its login is designed to sit behind one.</p>
+<h2 id="https">HTTPS<a class="headerlink" href="#https" title="Permanent link">&para;</a></h2>
+<p>Put nginx in front. The parts that matter:</p>
+<div class="highlight"><pre><span></span><code><span class="k">server</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kn">listen</span><span class="w"> </span><span class="mi">443</span><span class="w"> </span><span class="s">ssl</span><span class="w"> </span><span class="s">http2</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">server_name</span><span class="w"> </span><span class="s">rhapsode.example.com</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kn">ssl_certificate</span><span class="w">     </span><span class="s">/etc/nginx/ssl/rhapsode.pem</span><span class="p">;</span>
+<span class="w">    </span><span class="kn">ssl_certificate_key</span><span class="w"> </span><span class="s">/etc/nginx/ssl/rhapsode.key</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kn">client_max_body_size</span><span class="w"> </span><span class="mi">100m</span><span class="p">;</span><span class="w">      </span><span class="c1"># theses are large PDFs</span>
+
+<span class="w">    </span><span class="kn">location</span><span class="w"> </span><span class="s">/</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:7717</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_buffering</span><span class="w"> </span><span class="no">off</span><span class="p">;</span><span class="w">        </span><span class="c1"># progress is streamed; buffering stalls it</span>
+<span class="w">        </span><span class="kn">proxy_read_timeout</span><span class="w"> </span><span class="s">3600s</span><span class="p">;</span><span class="w">   </span><span class="c1"># a long paper holds the connection</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Two settings are easy to miss. Without <code>proxy_buffering off</code> the progress
+stream arrives in chunks and the queue looks frozen. Without a raised
+<code>client_max_body_size</code> a large PDF upload fails with 413 rather than a
+useful error.</p>
+<p>On nginx 1.24 and earlier, HTTP/2 goes on the <code>listen</code> line as shown; the
+standalone <code>http2 on;</code> directive only exists from 1.25.</p>
+<p>For certificates, either Let's Encrypt via certbot, or — if the domain is on
+Cloudflare with the proxy enabled — a Cloudflare Origin CA certificate,
+which lasts fifteen years and needs no renewal.</p>
+<h2 id="logging-in">Logging in<a class="headerlink" href="#logging-in" title="Permanent link">&para;</a></h2>
+<p>Visiting any page redirects to a login form. A successful login sets an
+HMAC-signed, HttpOnly session cookie; the signing key is generated on first
+run and stored <code>0600</code> in the library root, so restarts keep you logged in
+but deleting it ends every session.</p>
+<p>Machine clients send HTTP Basic with the same password instead — that is how
+the Zotero plugin authenticates, and it works for <code>curl</code> too:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-u<span class="w"> </span><span class="s2">&quot;you:password&quot;</span><span class="w"> </span>https://rhapsode.example.com/api/library
+</code></pre></div>
+<p>If no <code>password_hash</code> is configured, authentication is off entirely and a
+localhost install behaves exactly as it always has.</p>
+<h2 id="point-zotero-at-it">Point Zotero at it<a class="headerlink" href="#point-zotero-at-it" title="Permanent link">&para;</a></h2>
+<p>In Zotero's Config Editor set <code>extensions.rhapsode.server_url</code> to your
+domain and <code>extensions.rhapsode.server_auth</code> to <code>user:password</code>. Details in
+<a href="../zotero/">the plugin guide</a>. Requires plugin 0.3.2 or newer.</p>
+<h2 id="operating-it">Operating it<a class="headerlink" href="#operating-it" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>journalctl<span class="w"> </span>-u<span class="w"> </span>rhapsode<span class="w"> </span>-f<span class="w">          </span><span class="c1"># follow the queue</span>
+systemctl<span class="w"> </span>restart<span class="w"> </span>rhapsode<span class="w">         </span><span class="c1"># after a git pull</span>
+</code></pre></div>
+<p>A restart interrupts the paper being narrated, but does not lose it:
+completed audio is checkpointed to disk and the paper resumes where it
+stopped rather than starting over.</p>
+<p>To update:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/opt/rhapsode
+sudo<span class="w"> </span>-u<span class="w"> </span>rhapsode<span class="w"> </span>git<span class="w"> </span>pull
+systemctl<span class="w"> </span>restart<span class="w"> </span>rhapsode
+</code></pre></div>
+<p>The library is a directory of self-contained papers plus <code>library.json</code>.
+Backing up <code>/srv/rhapsode/library</code> backs up everything; <code>library.json</code> is
+also written with a <code>.bak</code> alongside it, and can be rebuilt from the paper
+directories if both are lost.</p>
 
 
 
@@ -1035,7 +1166,7 @@ the background — watch progress in the library tab.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../configuration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Configuration">
+          <a href="../zotero/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Zotero plugin">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1045,11 +1176,27 @@ the background — watch progress in the library tab.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Configuration
+                Zotero plugin
               </div>
             </div>
           </a>
         
+        
+          
+          <a href="../llm/" class="md-footer__link md-footer__link--next" aria-label="Next: LLM extraction repair">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                LLM extraction repair
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
         
       </nav>
     

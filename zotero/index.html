@@ -16,14 +16,14 @@
         <link rel="prev" href="../library/">
       
       
-        <link rel="next" href="../llm/">
+        <link rel="next" href="../hosting/">
       
       
         
       
       
       <link rel="icon" href="../assets/favicon.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -554,6 +554,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Install">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#using-a-hosted-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using a hosted server
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -582,6 +599,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hosting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hosting on a server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -828,6 +873,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Install">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#using-a-hosted-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using a hosted server
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -900,14 +962,42 @@ just uses it. To let the plugin <strong>start the server itself</strong>, tell i
 your checkout lives: Zotero <strong>Settings → Advanced → Config Editor</strong>, create
 the preference <code>extensions.rhapsode.repo</code> with the path to the cloned repo.
 (A custom port goes in <code>extensions.rhapsode.port</code>.)</p>
+<h3 id="using-a-hosted-server">Using a hosted server<a class="headerlink" href="#using-a-hosted-server" title="Permanent link">&para;</a></h3>
+<p>The plugin can send papers to a Rhapsode running on another machine instead
+of on this one — see <a href="../hosting/">Hosting on a server</a>. In the Config Editor:</p>
+<table>
+<thead>
+<tr>
+<th>Preference</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>extensions.rhapsode.server_url</code></td>
+<td><code>https://rhapsode.example.com</code></td>
+</tr>
+<tr>
+<td><code>extensions.rhapsode.server_auth</code></td>
+<td><code>user:password</code>, if the server requires a login</td>
+</tr>
+</tbody>
+</table>
+<p>Leave <code>server_url</code> empty for local mode, which is the default and behaves
+exactly as before. When it is set the plugin never starts a local server and
+<code>extensions.rhapsode.repo</code> is ignored — every upload and the library tab go
+to the remote host, so your laptop does no synthesis and needs no GPU.</p>
+<p>Requires plugin 0.3.2 or newer.</p>
 <p>For development, use <code>zotero-plugin/dev-install.sh</code> <strong>while Zotero is
 closed</strong> — it registers the source directory directly and pre-sets the
 repo path; <code>zotero-plugin/build-xpi.sh</code> builds the XPI.</p>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <p>On first use the plugin checks for a running server and otherwise launches
 <code>rhapsode --gui --no-open</code> itself (via <code>rhapsode.bat</code> on Windows), then
-streams each PDF to <code>/api/papers/by-path</code> with its Zotero metadata and
-opens the library in a tab. Generation continues in the background — a
+streams each PDF to the server with its Zotero metadata and opens the
+library in a tab. Locally that upload is a path handoff (<code>/api/papers/by-path</code>
+— the server reads the file in place); against a hosted server the PDF itself
+is uploaded to <code>/api/papers</code>, since the remote machine cannot see your disk. Generation continues in the background — a
 large collection is queued in seconds and synthesizes one paper at a time.</p>
 <p>Combine with <code>[gui] idle_exit_min</code> in <code>config.toml</code> and the server also
 goes away by itself when you stop listening.</p>
@@ -963,13 +1053,13 @@ also <a href="../troubleshooting/">Troubleshooting &amp; FAQ</a>.</p>
         
         
           
-          <a href="../llm/" class="md-footer__link md-footer__link--next" aria-label="Next: LLM extraction repair">
+          <a href="../hosting/" class="md-footer__link md-footer__link--next" aria-label="Next: Hosting on a server">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                LLM extraction repair
+                Hosting on a server
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1025,7 +1115,7 @@ also <a href="../troubleshooting/">Troubleshooting &amp; FAQ</a>.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.footer", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://saimailau.com/rhapsode/llm/">
       
       
-        <link rel="prev" href="../zotero/">
+        <link rel="prev" href="../hosting/">
       
       
         <link rel="next" href="../backends/">
@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/favicon.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -494,6 +494,34 @@
     
   
     Zotero plugin
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hosting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hosting on a server
   
 
     
@@ -1038,7 +1066,7 @@ GPU:</p>
 <tr>
 <td><code>ollama</code></td>
 <td>a local Gemma model on your GPU</td>
-<td>free, private, fast — the recommended default</td>
+<td>free, private, fast — the recommended default; the model is held warm between papers and released when the server stops</td>
 </tr>
 <tr>
 <td><code>claude</code></td>
@@ -1067,7 +1095,7 @@ point Rhapsode at it with the <code>api</code> runner:</p>
 <span class="n">runner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;api&quot;</span>
 <span class="n">api_base_url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://&lt;you&gt;--rhapsode-llm-serve.modal.run/v1&quot;</span>
 <span class="n">api_key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;&lt;your endpoint key&gt;&quot;</span>
-<span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;google/gemma-3-12b-it&quot;</span>
+<span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;google/gemma-4-12B-it&quot;</span>
 </code></pre></div>
 <p>Because the endpoint is OpenAI-compatible, no Modal-specific code is needed —
 the same <code>api_base_url</code> also works for a local vLLM, OpenRouter, together.ai,
@@ -1175,7 +1203,7 @@ you can turn GROBID off entirely.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../zotero/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Zotero plugin">
+          <a href="../hosting/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Hosting on a server">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1185,7 +1213,7 @@ you can turn GROBID off entirely.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Zotero plugin
+                Hosting on a server
               </div>
             </div>
           </a>
@@ -1254,7 +1282,7 @@ you can turn GROBID off entirely.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.footer", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
