@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Rhapsode for Zotero",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Listen to papers with synced read-along highlighting — Rhapsode, local Kokoro TTS",
   "author": "saimai",
   "applications": {

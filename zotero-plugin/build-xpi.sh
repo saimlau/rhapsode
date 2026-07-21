@@ -14,11 +14,18 @@ if [ "${1:-}" = "--release" ]; then
   # themselves (or start the server manually) for autostart
   cat > "$PLUGIN_DIR/prefs.js" <<EOF
 pref("extensions.rhapsode.port", 7717);
+// Remote mode: point the plugin at a hosted Rhapsode instead of localhost.
+// Declared empty so both appear in Zotero's Config Editor — a pref with no
+// default cannot be found there, let alone edited.
+pref("extensions.rhapsode.server_url", "");
+pref("extensions.rhapsode.server_auth", "");
 EOF
 else
   cat > "$PLUGIN_DIR/prefs.js" <<EOF
 pref("extensions.rhapsode.repo", "$REPO");
 pref("extensions.rhapsode.port", 7717);
+pref("extensions.rhapsode.server_url", "");
+pref("extensions.rhapsode.server_auth", "");
 EOF
 fi
 
