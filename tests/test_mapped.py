@@ -119,4 +119,23 @@ assert clean_text("A normal sentence, unchanged.") == "A normal sentence, unchan
 _mt = clean_mapped(MappedText.plain("angle 𝑥ሾ𝑘ሿ here"))
 assert len(_mt.text) == len(_mt.meta), "folding must keep the mapping 1:1"
 
+
+# --- Regal et al. 2025: the same exporter writes each maths glyph TWICE, the
+# second copy with zero advance width (verified in the PDF: identical char,
+# x0 == x1). Invisible on the page, but present in the text layer — so every
+# variable was read out twice, "alpha alpha zero".
+assert clean_text("𝛼𝛼𝑓𝑓−𝛼𝛼𝑝𝑝") == "α f−α p"
+assert clean_text("𝜎𝜎𝑦𝑦 and 𝜈𝜈.") == "σ y and ν."
+# collapsing happens BEFORE folding, while a doubled maths letter is still
+# distinguishable from an ordinary one: a real "mm" must survive
+assert clean_text("the mm scale") == "the mm scale"
+assert clean_text("all well, generally.") == "all well, generally."
+
+# marks espeak renders as silence, losing meaning from the sentence
+assert clean_text("at ± 0.65∘ relative") == "at ± 0.65° relative"   # ∘ is a
+assert clean_text("{0∘, 5∘, 30∘}") == "{0°, 5°, 30°}"               # degree sign
+assert "∘" in clean_text("a composition f ∘ g")   # ...only after a number
+assert clean_text("𝐾𝐾[𝑥𝑥, 𝑥𝑥′]") == "K[x, x prime]"
+assert clean_text("𝛼𝛼0 ∈ the set") == "α 0 in the set"
+
 print("all MappedText tests passed")

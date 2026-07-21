@@ -17,7 +17,9 @@ CITATION_RE = re.compile(r"\s*\[[0-9,;\s–—-]+\]")
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(“\"])")
 CHAR_FIXES = {"‐": "-", "‑": "-", "‒": "-", "­": "-", "ﬁ": "fi", "ﬂ": "fl",
               " ": " ", " ": " ", " ": " ", " ": " ",
-              " ": " "}
+              " ": " ",
+              # maths marks espeak has no word for and renders as silence
+              "′": " prime", "∈": " in "}
 GROUP_REF = re.compile(r"\\[1-9]")
 
 
@@ -146,6 +148,14 @@ GREEK_LETTERS = "\u0370-\u03ff\u1f00-\u1fff\u00b5"
 # speech engine has no name for either and falls back to spelling the code
 # point — "letter one D four five eight". NFKC maps each to the plain letter
 # it is a variant of.
+# The same export writes each maths glyph TWICE — the second copy with zero
+# advance width, so it is invisible on the page but present in the text layer
+# (verified: identical char, x0 == x1). Left in, every variable is read out
+# twice: "alpha alpha zero". Collapse runs of an identical maths character
+# BEFORE folding, while they are still distinguishable from ordinary letters —
+# afterwards "𝑚𝑚" and a real "mm" are the same two characters.
+MATH_DOUBLE = r"([\U0001D400-\U0001D7FF])\1+"
+
 # Built as a char->char table rather than a regex callback: MappedText.sub
 # takes a template, and every fold here is exactly one char to one char, so a
 # translation preserves the char/bbox mapping for free.
@@ -177,6 +187,11 @@ def clean_mapped(mt):
     mt = mt.sub(r"(\d)\s*–\s*(\d)", r"\1 to \2")
     # Fold maths letters to plain ones BEFORE the Greek rules below, so a
     # folded 𝛼 is treated as the α it is
+    # A RING OPERATOR straight after a number is a mis-encoded degree
+    # sign ("{0∘, 5∘, ... 30∘}", "± 0.65∘ relative"). espeak says
+    # nothing for ∘ and "degrees" for °, so the angle silently vanished.
+    mt = mt.sub(r"(\d\s*)∘", "\\1°")
+    mt = mt.sub(MATH_DOUBLE, r"\1")
     mt = mt.translate_chars(MATH_ALPHANUMERIC)
     mt = mt.sub(UNREADABLE_SCRIPTS, " ")
     # A Greek letter glued to its subscript is one token to the phonemizer,
