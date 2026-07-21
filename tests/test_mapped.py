@@ -58,4 +58,32 @@ r = t.rects()
 assert len(r) == 3, r
 assert r[0][:2] == [0, 10.0] and r[1][1] == 200.0 and r[2][2] == 115.0
 
+
+# --- the auxetic-paper crash: a letter-spaced heading wrapping across lines
+# ("G R A P H I C A L\nA B S T R A C T") raised "text/meta length mismatch"
+# during ingest, so the paper never entered the queue. _block_mapped joins a
+# block's lines with "\n", but the collapse path despaced only U+0020 while
+# the comparison string dropped ALL whitespace, leaving one extra meta entry
+# per line break.
+_text = "G R A P H I C A L\nA B S T R A C T"
+_meta = [(0, (float(i), 0.0, float(i) + 1, 10.0)) for i in range(len(_text))]
+_mt = MappedText(_text, _meta)
+_despaced = [(c, m) for c, m in zip(_mt.text, _mt.meta) if not c.isspace()]
+_out = MappedText("".join(c for c, _ in _despaced), [m for _, m in _despaced])
+assert _out.text == "GRAPHICALABSTRACT", _out.text
+assert len(_out.text) == len(_out.meta), "the invariant that used to blow up"
+
+# the old filter must remain visibly wrong, so a revert fails loudly here
+_old = "".join(c for c, _ in
+               [(c, m) for c, m in zip(_mt.text, _mt.meta) if c != " "])
+assert "\n" in _old, "filtering only spaces keeps the newline that crashed it"
+
+# .capitalize() is not length-preserving for every code point ("ßx" -> "Ssx"),
+# and the meta list must stay 1:1 with the text
+assert len("ßx".capitalize()) != len("ßx"), "precondition"
+_collapsed = "ßx"
+_cap = _collapsed.capitalize()
+assert (_cap if len(_cap) == len(_collapsed) else _collapsed) == _collapsed, \
+    "must fall back rather than desync the mapping"
+
 print("all MappedText tests passed")

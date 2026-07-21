@@ -9,7 +9,9 @@ Setup (one time):
     pip install modal
     modal setup                      # authenticate your Modal account
     modal deploy modal_app.py        # prints the endpoint URL
-    # With REQUIRES_PROXY_AUTH = True (the default below), create a proxy-auth
+    # With REQUIRES_PROXY_AUTH = True
+# concurrent requests per container — each needs its own Kokoro pipeline
+MAX_CONCURRENT = 4 (the default below), create a proxy-auth
     # token at https://modal.com/settings/proxy-auth-tokens — NOT
     # `modal token new`, which mints ak-/as- CLI tokens and will 401 here.
     # The pair (wk-.../ws-...) is sent as the Modal-Key / Modal-Secret headers.
@@ -60,13 +62,29 @@ image = (
 @app.cls(image=image, gpu="T4", scaledown_window=120, timeout=600)
 # without this each container takes one request at a time, so every parallel
 # request cold-starts a fresh T4 and reloads the model
-@modal.concurrent(max_inputs=4)
+@modal.concurrent(max_inputs=MAX_CONCURRENT)
 class KokoroTTS:
     @modal.enter()
     def load(self):
+        import queue
+
         from kokoro import KPipeline
-        self.pipeline = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M",
-                                  device="cuda")
+
+        # One pipeline per concurrent slot, NOT one shared by all of them.
+        # A KPipeline owns a misaki EspeakFallback owning a single phonemizer
+        # EspeakBackend, which stores per-call word counts on the instance
+        # (_count_txt written before phonemizing, _count_phn after, then
+        # compared). Two threads inside that window compare thread A's input
+        # count against thread B's output count and the backend raises
+        # "number of lines in input and output must be equal" — a 500 that
+        # phonemizer itself marks unreachable because it is impossible
+        # single-threaded. Checking a pipeline out per request makes the G2P
+        # state private again. Kokoro-82M is ~330 MB, so N copies are cheap.
+        self.pool = queue.Queue()
+        for _ in range(MAX_CONCURRENT):
+            self.pool.put(KPipeline(lang_code="a",
+                                    repo_id="hexgrad/Kokoro-82M",
+                                    device="cuda"))
 
     @modal.fastapi_endpoint(method="POST",
                             requires_proxy_auth=REQUIRES_PROXY_AUTH)
@@ -87,11 +105,21 @@ class KokoroTTS:
             return {"error": "max 8 texts per request (Modal's 150 s "
                              "web-endpoint timeout); send more batches",
                     "results": []}
-        for text in texts[:8]:
+        pipeline = self.pool.get()          # private for this request
+        try:
+            results = self._render(pipeline, texts[:8], voice, speed)
+        finally:
+            self.pool.put(pipeline)
+        return {"sample_rate": 24000, "results": results}
+
+    def _render(self, pipeline, texts, voice, speed):
+        import numpy as np
+        results = []
+        for text in texts:
             waves, words = [], []
             offset = 0.0
-            for item in self.pipeline(str(text), voice=voice,
-                                      speed=speed):
+            for item in pipeline(str(text), voice=voice,
+                                 speed=speed):
                 audio = getattr(item, "audio", None)
                 if audio is None:
                     _, _, audio = item
@@ -108,4 +136,4 @@ class KokoroTTS:
                    * 32767.0).astype("<i2").tobytes()
             results.append({"pcm_b64": base64.b64encode(pcm).decode(),
                             "words": words})
-        return {"sample_rate": 24000, "results": results}
+        return results

@@ -498,12 +498,25 @@ def extract_segments(pdf_path, max_pages=None):
                 if collapsed:  # "a b s t r a c t" -> "abstract"
                     if collapsed.lower() in ("articleinfo", "articlehistory"):
                         continue
+                    # Drop ALL whitespace, not just U+0020: `flat` was built
+                    # with " ".join(text.split()), so `collapsed` is exactly
+                    # the non-whitespace chars. Filtering only spaces left the
+                    # "\n" that separates a heading's lines, so a wrapped
+                    # spaced heading ("G R A P H I C A L\nA B S T R A C T")
+                    # produced one meta entry per line more than characters
+                    # and MappedText's 1:1 char/bbox invariant raised.
                     despaced = [(c, m) for c, m in zip(mt.text, mt.meta)
-                                if c != " "]
+                                if not c.isspace()]
                     mt = MappedText("".join(c for c, _ in despaced),
                                     [m for _, m in despaced])
-                    flat = collapsed.capitalize()
-                    mt = MappedText(flat, mt.meta)
+                    # .capitalize() is not length-preserving for every code
+                    # point ("ßx" -> "Ssx"), and the meta list must stay 1:1
+                    cap = collapsed.capitalize()
+                    if len(cap) == len(collapsed):
+                        flat = cap
+                        mt = MappedText(flat, mt.meta)
+                    else:
+                        flat = collapsed
 
             if is_heading and STOP_HEADINGS.match(flat):
                 return segments, True, meta

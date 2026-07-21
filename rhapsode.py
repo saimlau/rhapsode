@@ -11,8 +11,10 @@ app.
 
 import argparse
 import gc
+import hashlib
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -27,6 +29,10 @@ from extraction import (MappedText, clean_mapped, clean_text,
                         extract_segments, merge_continuations, split_sentences)
 
 SAMPLE_RATE = 24000
+# A long paper is thousands of TTS requests; without retry, any per-request
+# failure rate makes a complete run improbable, and a failure costs the paper.
+TTS_ATTEMPTS = 4
+TTS_BACKOFF = 0.5      # seconds; doubled per attempt, jittered
 HEADING_PAUSE_S = 0.7
 PARAGRAPH_PAUSE_S = 0.35
 SENTENCE_PAUSE_S = 0.08
@@ -324,12 +330,34 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
 
     def fetch(group):
         texts = [t for _, t in group]
-        # (connect, read): a wedged container must not pin shutdown for ten
-        # minutes. A request is a handful of short texts — seconds of GPU work.
-        resp = session.post(endpoint, headers=headers, timeout=(10, 180),
-                            json={"texts": texts,
-                                  "voice": voice, "speed": speed})
-        resp.raise_for_status()
+        # A paper is thousands of requests; at any per-request failure rate a
+        # run without retry eventually dies, and one death costs the whole
+        # paper. The request is a pure function of `texts`, so retrying is
+        # safe. Retry only TRANSPORT failures — a 200 carrying {"error": ...}
+        # is deterministic and would just burn GPU credits on every attempt.
+        for attempt in range(TTS_ATTEMPTS):
+            try:
+                # (connect, read): a wedged container must not pin shutdown
+                # for ten minutes. A request is a handful of short texts.
+                resp = session.post(endpoint, headers=headers,
+                                    timeout=(10, 180),
+                                    json={"texts": texts,
+                                          "voice": voice, "speed": speed})
+                resp.raise_for_status()
+                break
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                last = exc
+            except requests.HTTPError as exc:
+                status = getattr(exc.response, "status_code", 0)
+                if status < 500:            # 4xx is our bug, not a blip
+                    raise
+                last = exc
+            if attempt == TTS_ATTEMPTS - 1:
+                raise last
+            # exponential backoff, jittered so parallel workers that hit the
+            # same wedged container do not retry in lockstep
+            time.sleep(TTS_BACKOFF * (2 ** attempt) * (1 + random.random()))
+
         data = resp.json()
         if data.get("error"):  # endpoint reports 200 + {"error": ...}
             raise RuntimeError(f"modal endpoint error: {data['error']}")
@@ -389,6 +417,61 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
         session.close()
 
 
+CKPT_EVERY = 25          # units between checkpoint flushes
+
+
+def _units_sig(units, voice, speed):
+    """Identity of this narration job. A checkpoint is only reusable if the
+    text, voice and speed are all unchanged — re-extracting a paper or
+    switching voice must start clean, not splice two narrations together."""
+    h = hashlib.sha256()
+    h.update(f"{voice}\x00{speed}\x00{len(units)}\x00".encode())
+    for u in units:
+        h.update(u["text"].encode("utf-8", "replace"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def _load_checkpoint(ckpt_path, pcm_path, sig, units):
+    """Return (done, samples) to resume from, or (0, 0) to start clean.
+
+    The PCM sidecar is truncated to exactly the samples the checkpoint
+    vouches for: a crash mid-write can leave a partial tail, and splicing
+    that into the output would desynchronise every later word timing."""
+    try:
+        ck = json.loads(ckpt_path.read_text())
+    except (OSError, ValueError):
+        return 0, 0
+    if ck.get("sig") != sig or not pcm_path.exists():
+        return 0, 0
+    done, samples = int(ck.get("done", 0)), int(ck.get("samples", 0))
+    if not 0 < done <= len(units):
+        return 0, 0
+    need = samples * 2                       # s16le mono
+    if pcm_path.stat().st_size < need:       # sidecar lost data: distrust it
+        return 0, 0
+    if pcm_path.stat().st_size > need:
+        with open(pcm_path, "r+b") as fh:
+            fh.truncate(need)
+    for u, saved in zip(units, ck.get("units", [])):   # restore timings
+        u.update(saved)
+    return done, samples
+
+
+def _save_checkpoint(ckpt_path, sig, done, samples, units, pcm):
+    """Flush audio first, then the checkpoint that vouches for it — never the
+    reverse, or a crash between the two would claim samples that aren't on
+    disk."""
+    pcm.flush()
+    os.fsync(pcm.fileno())
+    payload = {"sig": sig, "done": done, "samples": samples,
+               "units": [{k: u[k] for k in ("t0", "t1", "words") if k in u}
+                         for u in units[:done]]}
+    tmp = ckpt_path.with_suffix(ckpt_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload))
+    os.replace(tmp, ckpt_path)               # atomic: never a half-written ckpt
+
+
 def synthesize(units, out_path, voice, speed, tags=None, progress=None,
                bitrate="48k", tts_cfg=None):
     """Synthesize units, streaming raw PCM into ffmpeg as it is produced —
@@ -406,8 +489,24 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
         raise RuntimeError("ffmpeg not found on PATH (needed for audio encoding)")
     tts_cfg = tts_cfg or {}
     modal_backend = tts_cfg.get("backend", "local") == "modal"
-    producer = (_modal_unit_audio(units, voice, speed, tts_cfg)
-                if modal_backend else _local_unit_audio(units, voice, speed))
+
+    # Resume: a long paper is thousands of TTS requests over hours, and any
+    # failure used to discard every completed unit. Audio is mirrored to a raw
+    # PCM sidecar as it is produced; on restart the finished units are replayed
+    # from disk into a fresh encoder — no re-synthesis, no GPU spend — and
+    # narration continues from the first unit that never completed.
+    pcm_path = out_path.with_suffix(out_path.suffix + ".pcm")
+    ckpt_path = out_path.with_suffix(out_path.suffix + ".ckpt")
+    sig = _units_sig(units, voice, speed)
+    done, samples = _load_checkpoint(ckpt_path, pcm_path, sig, units)
+    if done:
+        print(f"  resuming after {done}/{len(units)} units "
+              f"({samples / SAMPLE_RATE / 60:.1f} min already narrated)",
+              flush=True)
+
+    todo = units[done:]
+    producer = (_modal_unit_audio(todo, voice, speed, tts_cfg)
+                if modal_backend else _local_unit_audio(todo, voice, speed))
 
     # m4a for the read-along view: MP4's sample table makes browser seeks
     # sample-accurate, unlike (VBR) MP3 which drifts on every seek
@@ -429,16 +528,27 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
     detach = (dict(start_new_session=True) if os.name == "posix"
               else dict(creationflags=subprocess.CREATE_NEW_PROCESS_GROUP))
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, **detach)
-    samples = 0
+    pcm_file = open(pcm_path, "r+b" if done else "wb")
+    if done:                       # replay finished audio into the new encoder
+        pcm_file.seek(0)
+        left = samples * 2
+        while left > 0:
+            block = pcm_file.read(min(1 << 22, left))
+            if not block:
+                raise RuntimeError("checkpoint PCM shorter than recorded")
+            proc.stdin.write(block)
+            left -= len(block)
+        pcm_file.seek(samples * 2)
 
     def push(wave):
         nonlocal samples
         pcm = (np.clip(wave, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
         proc.stdin.write(pcm)
+        pcm_file.write(pcm)        # the sidecar is what makes resume possible
         samples += len(wave)
 
     try:
-        for i, (unit, chunks) in enumerate(producer, 1):
+        for i, (unit, chunks) in enumerate(producer, done + 1):
             text = unit["text"]
             if progress:
                 progress(i, len(units), text)
@@ -455,12 +565,21 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
             unit["t1"] = samples / SAMPLE_RATE
             unit["words"] = words
             n_pause = int(unit["pause"] * SAMPLE_RATE)
-            proc.stdin.write(b"\x00\x00" * n_pause)
+            silence = b"\x00\x00" * n_pause
+            proc.stdin.write(silence)
+            pcm_file.write(silence)
             samples += n_pause
+            # checkpoint on a unit boundary, where audio and timings agree
+            if i % CKPT_EVERY == 0:
+                _save_checkpoint(ckpt_path, sig, i, samples, units, pcm_file)
         proc.stdin.close()
         if proc.wait() != 0:
             raise RuntimeError(f"ffmpeg encode failed (rc={proc.returncode})")
         os.replace(part, out_path)
+        pcm_file.close()
+        # the paper is encoded: the resume scaffolding is now just disk
+        pcm_path.unlink(missing_ok=True)
+        ckpt_path.unlink(missing_ok=True)
         if not modal_backend:
             with TTS_LOCK:  # a long paper isn't "idle time" for the model
                 _PIPE_STATE["last_used"] = time.time()
@@ -477,6 +596,12 @@ def synthesize(units, out_path, voice, speed, tags=None, progress=None,
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+        if not pcm_file.closed:
+            pcm_file.close()
+        # The .part is a half-written container and worthless, but the PCM
+        # sidecar and checkpoint are exactly what a retry resumes from — the
+        # old code deleted the completed audio here, which is why a single
+        # transient error cost an entire paper.
         if part.exists():
             part.unlink(missing_ok=True)
     return samples / SAMPLE_RATE
