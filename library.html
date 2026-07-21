@@ -89,6 +89,22 @@ body { display: flex; flex-direction: column; background: var(--desk);
   #plmenu button:hover { background: rgba(255, 255, 255, .06); }
 }
 #side header .n { font: 11px var(--mono); color: var(--muted); }
+#find { padding: 0 18px 10px; }
+#q {
+  width: 100%; box-sizing: border-box; padding: 7px 10px;
+  border: 1px solid var(--hairline); border-radius: 8px;
+  background: var(--desk); color: var(--ink);
+  font: 12.5px var(--sans);
+}
+#q::placeholder { color: var(--muted); }
+#q:focus { outline: none; border-color: var(--marker);
+           box-shadow: 0 0 0 2px var(--marker-wash); }
+#q.on { border-color: var(--marker); }
+/* the matched substring, highlighted with the same marker as spoken text */
+.row .hit { background: var(--marker-wash); border-radius: 2px; }
+#none {
+  padding: 16px 18px; color: var(--muted); font-size: 12.5px; display: none;
+}
 #drop {
   margin: 0 18px; padding: 10px 0 12px; border-bottom: 1px solid var(--hairline);
   color: var(--muted); font-size: 12.5px; cursor: pointer;
@@ -209,9 +225,14 @@ body { display: flex; flex-direction: column; background: var(--desk);
 <aside id="side">
   <header><h1 id="plTitle" title="Switch playlist">All papers ▾</h1>
     <span class="n" id="count"></span></header>
+  <div id="find">
+    <input id="q" type="search" placeholder="Search titles and authors"
+           autocomplete="off" spellcheck="false" aria-label="Search the library">
+  </div>
   <div id="drop">Drop PDFs or click to add</div>
   <input id="file" type="file" accept="application/pdf" multiple hidden>
   <div id="queue"></div>
+  <div id="none">No paper matches that.</div>
   <footer>
     <label><input id="autoadv" type="checkbox"> Auto-advance</label>
     <a id="dashLink" href="/dashboard">Dashboard</a>
@@ -291,11 +312,40 @@ function askPrompt(message, def = "") {
   });
 }
 function playlists() { return state.playlists || {}; }
-function visibleIds() {
-  if (activePl && playlists()[activePl]) {
-    return playlists()[activePl].order.filter(id => state.papers[id]);
+let query = "";                       // current search text, lowercased
+
+function haystack(p) {
+  return `${p.title || ""} ${p.authors || ""} ${p.year || ""} ${p.filename || ""}`
+    .toLowerCase();
+}
+
+/* Highlight every occurrence of the query inside a title. Escapes first, then
+   wraps matches, so the marks are the only markup that survives. */
+function mark(text) {
+  if (!query) return esc(text);
+  const low = text.toLowerCase();
+  let out = "", at = 0, i;
+  while ((i = low.indexOf(query, at)) !== -1) {
+    out += esc(text.slice(at, i)) +
+           `<span class="hit">${esc(text.slice(i, i + query.length))}</span>`;
+    at = i + query.length;
   }
-  return state.order;
+  return out + esc(text.slice(at));
+}
+
+function visibleIds() {
+  let ids;
+  if (activePl && playlists()[activePl]) {
+    ids = playlists()[activePl].order.filter(id => state.papers[id]);
+  } else {
+    ids = state.order;
+  }
+  // search narrows whatever the playlist already scoped
+  if (query) {
+    ids = ids.filter(id => state.papers[id] &&
+                           haystack(state.papers[id]).includes(query));
+  }
+  return ids;
 }
 function setActivePl(plid) {
   selected.clear();
@@ -368,7 +418,10 @@ function render() {
   const pl = activePl && playlists()[activePl];
   $("plTitle").textContent = (pl ? pl.name : "All papers") + " ▾";
   const ready = ids.filter(id => state.papers[id]?.status === "ready");
-  $("count").textContent = ids.length ? `${ready.length}/${ids.length}` : "";
+  $("count").textContent = query
+    ? `${ids.length} found`
+    : (ids.length ? `${ready.length}/${ids.length}` : "");
+  $("none").style.display = (query && !ids.length) ? "block" : "none";
   q.innerHTML = "";
   for (const id of ids) {
     const p = state.papers[id];
@@ -389,7 +442,7 @@ function render() {
       p.status === "pending"    ? `<span class="dur">queued</span>` :
       p.status === "ready"      ? `<span class="dur">${fmt(p.duration)}</span>` : "";
     row.innerHTML = `
-      <div class="t">${esc(p.title)}</div>
+      <div class="t">${mark(p.title || "")}</div>
       <div class="sub"><span class="cite">${esc(citation(p))}</span>${status}</div>
       ${p.status === "generating"
         ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}
@@ -614,6 +667,30 @@ $("queue").addEventListener("dragend", () => {
   }
   dragId = null;
 });
+// ------------------------------------------------------------- search
+$("q").addEventListener("input", () => {
+  query = $("q").value.trim().toLowerCase();
+  $("q").classList.toggle("on", !!query);
+  render();
+});
+$("q").addEventListener("keydown", e => {
+  if (e.key === "Escape") {                 // clear without leaving the field
+    e.stopPropagation();
+    $("q").value = ""; query = ""; $("q").classList.remove("on"); render();
+  } else if (e.key === "Enter") {           // play the top match
+    const first = visibleIds().find(id => state.papers[id]?.status === "ready");
+    if (first) play(first, true);
+  }
+});
+// "/" focuses search from anywhere, the way a reader reaches for the index
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && !/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)
+      && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault();
+    $("q").focus();
+  }
+});
+
 $("autoadv").addEventListener("change", () => {
   state.settings.auto_advance = $("autoadv").checked;
   fetch("/api/settings", { method: "PUT",
