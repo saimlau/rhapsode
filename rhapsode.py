@@ -255,6 +255,11 @@ def _local_unit_audio(units, voice, speed):
     Kokoro pipeline. Word timestamps come straight from Kokoro's tokens."""
     pipeline = get_pipeline()
     for unit in units:
+        # a silent unit (a display equation) is shown, not spoken: no text,
+        # no inference — just its rects and the pause the caller writes
+        if not unit["text"].strip():
+            yield unit, []
+            continue
         with TTS_LOCK:
             results = list(pipeline(unit["text"], voice=voice, speed=speed))
         chunks = []
@@ -324,6 +329,8 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
     # the cap and may span requests; reassembly below is piece-order driven
     flat = []                            # (unit_index, piece_text)
     for ui, u in enumerate(units):
+        if not u["text"].strip():        # silent unit: no request, no cost
+            continue
         for piece in _pieces(u["text"]):
             flat.append((ui, piece))
     groups = [flat[i:i + batch] for i in range(0, len(flat), batch)]
@@ -392,6 +399,18 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
     try:
         submitted = 0
         hold_ui, hold = None, []       # pieces accumulated for the open unit
+        cursor = 0                     # next unit index still to be emitted
+
+        def _catch_up(upto):
+            """Emit the silent units (display equations) sitting before
+            `upto`, so they keep their place in the narration even though
+            they were never sent to the endpoint."""
+            nonlocal cursor
+            while cursor < upto:
+                if not units[cursor]["text"].strip():
+                    yield units[cursor], []
+                cursor += 1
+
         for idx, group in enumerate(groups):
             while submitted < len(groups) and submitted < idx + width:
                 pending[submitted] = pool.submit(fetch, groups[submitted])
@@ -403,11 +422,16 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
             for (ui, _piece), res in zip(group, results):
                 if ui != hold_ui:
                     if hold:
+                        yield from _catch_up(hold_ui)
                         yield _finish(hold_ui, hold)
+                        cursor = hold_ui + 1
                     hold_ui, hold = ui, []
                 hold.append(res)
         if hold:
+            yield from _catch_up(hold_ui)
             yield _finish(hold_ui, hold)
+            cursor = hold_ui + 1
+        yield from _catch_up(len(units))      # trailing equations
     finally:
         # abandon doomed work instead of waiting on it: on an error, on
         # GeneratorExit, and on shutdown

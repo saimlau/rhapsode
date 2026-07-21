@@ -36,9 +36,17 @@ section/subsection headings, and body paragraphs — and which are FURNITURE to
 drop: journal/running headers and footers, author names and affiliations,
 the article-info / keywords / history box, corresponding-author footnotes,
 emails, DOI and copyright lines, page numbers, figure and table captions,
-standalone mathematical equations, table content (cells, rows, numeric data),
-and everything from References/Bibliography onward (including acknowledgements,
-funding, author contributions, and the reference list).
+table content (cells, rows, numeric data), and everything from
+References/Bibliography onward (including acknowledgements, funding, author
+contributions, and the reference list).
+
+Separately, identify DISPLAY EQUATIONS: blocks that are a standalone
+mathematical expression set off from the text, often centred and often with a
+number like (3) at the right margin. These are neither content nor furniture —
+list their ids in "equations" and ALSO include them in "order" at the position
+where they are read, so the narration pauses at the equation instead of
+speaking its symbols. A block of ordinary prose that merely contains a few
+symbols is body text, not a display equation.
 
 IMPORTANT: a block whose first word is lowercase, or whose tail does not end
 with sentence punctuation, is a body paragraph split across a column or page
@@ -53,6 +61,7 @@ sentence punctuation continues into the next content block).
 Reply with ONLY a JSON object, no prose:
 {"order": [ids of content blocks, in reading order],
  "headings": [subset of order that are the title or a section heading],
+ "equations": [subset of order that are standalone display equations],
  "authors": "comma-separated author names, or empty string",
  "year": publication year as an integer, or null}
 """
@@ -176,6 +185,8 @@ def _cluster(boxes):
 HEADING_PAUSE_S = 0.7
 PARAGRAPH_PAUSE_S = 0.5
 SENTENCE_PAUSE_S = 0.25
+# long enough to read a displayed equation while the narration waits for you
+EQUATION_PAUSE_S = 1.6
 
 # Per-window budget of block-summary chars. Big-context capable runners
 # (claude/codex/api) take large windows — a paper is one call. Small local
@@ -219,6 +230,7 @@ DECISION_SCHEMA = {
     "properties": {
         "order": {"type": "array", "items": {"type": "integer"}},
         "headings": {"type": "array", "items": {"type": "integer"}},
+        "equations": {"type": "array", "items": {"type": "integer"}},
         "authors": {"type": "string"},
         "year": {"type": ["integer", "null"]},
     },
@@ -306,12 +318,14 @@ def extract_document(pdf_path, llm_cfg):
                            f"{len(windows)} windows > {MAX_WINDOWS})")
     decisions = _classify_windows(windows, llm_cfg)
 
-    order, headings, authors, year = [], set(), "", None
+    order, headings, equations, authors, year = [], set(), set(), "", None
     for d in decisions:
         order += [i for i in d.get("order", []) if i in byid]
         headings |= {i for i in d.get("headings", []) if i in byid}
+        equations |= {i for i in d.get("equations", []) if i in byid}
         authors = authors or (d.get("authors") or "").strip()
         year = year or d.get("year")
+    equations -= headings          # a block is one or the other, never both
     if not order:
         raise llm.LLMError("LLM kept no content blocks")
 
@@ -325,6 +339,20 @@ def extract_document(pdf_path, llm_cfg):
 
     for i in order:
         blk = byid[i]
+        if i in equations:
+            # A display equation is shown, not spoken: reading its symbols
+            # aloud produces "sigma equals F slash A where epsilon i j equals
+            # one half parenthesis..." — noise that derails the paragraph.
+            # The unit carries no text, so it costs no TTS call; it holds the
+            # page rects and a beat of silence, and the read-along highlights
+            # the equation while the narration waits.
+            flush()
+            boxes = [b for t in _tokens(blk["words"]) for b in t[1]]
+            if boxes:
+                units.append({"kind": "equation", "text": "",
+                              "rects": _cluster(boxes),
+                              "para_end": False, "pause": EQUATION_PAUSE_S})
+            continue
         if i in headings:
             flush()
             text = clean_text(" ".join(t[0] for t in _tokens(blk["words"])))

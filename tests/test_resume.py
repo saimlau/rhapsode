@@ -257,6 +257,74 @@ def test_truncated_sidecar_is_not_trusted():
     assert pcm.stat().st_size == 2000, "tail past the checkpoint must be cut"
 
 
+
+# --------------------------------------------------- display equations
+
+def _mixed_units():
+    """body, EQUATION, body, body, EQUATION (trailing)."""
+    def body(i):
+        return {"text": f"Body sentence {i}.", "kind": "body", "rects": [],
+                "para_end": False, "pause": 0.0}
+
+    def eq():
+        return {"text": "", "kind": "equation", "rects": [[0, 1, 2, 3, 4]],
+                "para_end": False, "pause": 1.6}
+
+    return [body(0), eq(), body(1), body(2), eq()]
+
+
+def test_equations_are_never_sent_to_tts_but_keep_their_place():
+    units = _mixed_units()
+    s = _Session()
+    out = _run(units, s, batch=2, lookahead=2)
+
+    assert [u["kind"] for u, _ in out] == \
+        ["body", "equation", "body", "body", "equation"], \
+        "equations must stay in reading order, not bunch at the end"
+    assert [u["text"] for u, _ in out] == [u["text"] for u in units]
+
+    sent = [t for texts in s.texts_seen for t in texts]
+    assert sent == ["Body sentence 0.", "Body sentence 1.", "Body sentence 2."], \
+        f"only spoken units may reach the endpoint, got {sent}"
+    for unit, chunks in out:
+        if unit["kind"] == "equation":
+            assert chunks == [], "an equation carries no audio"
+
+
+def test_equation_only_document_makes_no_requests():
+    units = [{"text": "", "kind": "equation", "rects": [[0, 1, 2, 3, 4]],
+              "para_end": False, "pause": 1.6}]
+    s = _Session()
+    out = _run(units, s, batch=8, lookahead=4)
+    assert len(out) == 1 and out[0][1] == []
+    assert s.posts == 0, "nothing to speak means nothing to pay for"
+
+
+def test_equation_becomes_silence_of_its_pause_length():
+    if not shutil.which("ffmpeg"):
+        print("  (skipped: ffmpeg not installed)")
+        return
+    tmp = Path(tempfile.mkdtemp())
+    spoken = [u for u in _mixed_units() if u["text"]]
+    for u in spoken:
+        u["pause"] = 0.0
+    plain = _synth(spoken, tmp / "plain.m4a", _Session())
+
+    mixed = _mixed_units()
+    for u in mixed:
+        if u["text"]:
+            u["pause"] = 0.0
+    witheq = _synth(mixed, tmp / "eq.m4a", _Session())
+
+    gap = witheq - plain
+    assert abs(gap - 3.2) < 0.2, \
+        f"two 1.6 s equation pauses expected, got {gap:.2f}s"
+    # the equation units must carry real timings so the viewer can highlight
+    eqs = [u for u in mixed if u["kind"] == "equation"]
+    assert all("t0" in u and "t1" in u for u in eqs), \
+        "equations need timings to highlight against"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
