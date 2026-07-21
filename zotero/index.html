@@ -959,35 +959,38 @@ auto-updates from future releases. If you had the old <em>paper2audio</em> plugi
 it is uninstalled automatically.</p>
 <p>If a Rhapsode server is already running (default port 7717), the plugin
 just uses it. To let the plugin <strong>start the server itself</strong>, tell it where
-your checkout lives: Zotero <strong>Settings → Advanced → Config Editor</strong>, create
-the preference <code>extensions.rhapsode.repo</code> with the path to the cloned repo.
-(A custom port goes in <code>extensions.rhapsode.port</code>.)</p>
+your checkout lives: <strong>Zotero → Settings → Rhapsode → Local server</strong>, and
+give the path to the cloned repo. (A custom port sits beside it.)</p>
 <h3 id="using-a-hosted-server">Using a hosted server<a class="headerlink" href="#using-a-hosted-server" title="Permanent link">&para;</a></h3>
 <p>The plugin can send papers to a Rhapsode running on another machine instead
-of on this one — see <a href="../hosting/">Hosting on a server</a>. In the Config Editor:</p>
+of on this one — see <a href="../hosting/">Hosting on a server</a>.</p>
+<p>Open <strong>Zotero → Settings → Rhapsode</strong> and fill in <strong>Hosted server</strong>:</p>
 <table>
 <thead>
 <tr>
-<th>Preference</th>
+<th>Field</th>
 <th>Value</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>extensions.rhapsode.server_url</code></td>
+<td>Address</td>
 <td><code>https://rhapsode.example.com</code></td>
 </tr>
 <tr>
-<td><code>extensions.rhapsode.server_auth</code></td>
-<td><code>user:password</code>, if the server requires a login</td>
+<td>Sign-in</td>
+<td><code>user:password</code>, if the server asks for one</td>
 </tr>
 </tbody>
 </table>
-<p>Leave <code>server_url</code> empty for local mode, which is the default and behaves
+<p>Leave the address empty for local mode, which is the default and behaves
 exactly as before. When it is set the plugin never starts a local server and
-<code>extensions.rhapsode.repo</code> is ignored — every upload and the library tab go
-to the remote host, so your laptop does no synthesis and needs no GPU.</p>
-<p>Requires plugin 0.3.2 or newer.</p>
+the Rhapsode folder is ignored — every upload and the library tab go to the
+remote host, so your laptop does no synthesis and needs no GPU.</p>
+<p>The same settings are <code>extensions.rhapsode.server_url</code> and
+<code>server_auth</code> in the Config Editor, if you prefer editing them there.</p>
+<p>Requires plugin 0.3.3 or newer for the settings pane; 0.3.2 has the prefs but
+no UI for them.</p>
 <p>For development, use <code>zotero-plugin/dev-install.sh</code> <strong>while Zotero is
 closed</strong> — it registers the source directory directly and pre-sets the
 repo path; <code>zotero-plugin/build-xpi.sh</code> builds the XPI.</p>
