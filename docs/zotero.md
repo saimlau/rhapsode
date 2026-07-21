@@ -22,26 +22,31 @@ it is uninstalled automatically.
 
 If a Rhapsode server is already running (default port 7717), the plugin
 just uses it. To let the plugin **start the server itself**, tell it where
-your checkout lives: Zotero **Settings → Advanced → Config Editor**, create
-the preference `extensions.rhapsode.repo` with the path to the cloned repo.
-(A custom port goes in `extensions.rhapsode.port`.)
+your checkout lives: **Zotero → Settings → Rhapsode → Local server**, and
+give the path to the cloned repo. (A custom port sits beside it.)
 
 ### Using a hosted server
 
 The plugin can send papers to a Rhapsode running on another machine instead
-of on this one — see [Hosting on a server](hosting.md). In the Config Editor:
+of on this one — see [Hosting on a server](hosting.md).
 
-| Preference | Value |
+Open **Zotero → Settings → Rhapsode** and fill in **Hosted server**:
+
+| Field | Value |
 | --- | --- |
-| `extensions.rhapsode.server_url` | `https://rhapsode.example.com` |
-| `extensions.rhapsode.server_auth` | `user:password`, if the server requires a login |
+| Address | `https://rhapsode.example.com` |
+| Sign-in | `user:password`, if the server asks for one |
 
-Leave `server_url` empty for local mode, which is the default and behaves
+Leave the address empty for local mode, which is the default and behaves
 exactly as before. When it is set the plugin never starts a local server and
-`extensions.rhapsode.repo` is ignored — every upload and the library tab go
-to the remote host, so your laptop does no synthesis and needs no GPU.
+the Rhapsode folder is ignored — every upload and the library tab go to the
+remote host, so your laptop does no synthesis and needs no GPU.
 
-Requires plugin 0.3.2 or newer.
+The same settings are `extensions.rhapsode.server_url` and
+`server_auth` in the Config Editor, if you prefer editing them there.
+
+Requires plugin 0.3.3 or newer for the settings pane; 0.3.2 has the prefs but
+no UI for them.
 
 For development, use `zotero-plugin/dev-install.sh` **while Zotero is
 closed** — it registers the source directory directly and pre-sets the

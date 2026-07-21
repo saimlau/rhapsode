@@ -297,10 +297,24 @@ async function _uninstallOldPlugin() {
   }
 }
 
-function startup({ rootURI: uri }) {
+async function startup({ rootURI: uri }) {
   rootURI = uri;
   log("startup, rootURI=" + rootURI);
   _uninstallOldPlugin();
+  // A settings pane, so the server address and sign-in are discoverable.
+  // The Config Editor can only show a pref that has a default, and even then
+  // it cannot say that one wants a URL and the other "user:password".
+  // Zotero unregisters the pane itself when the plugin shuts down.
+  try {
+    await Zotero.PreferencePanes.register({
+      pluginID: "rhapsode@saimai.lau",
+      src: rootURI + "prefs.xhtml",
+      stylesheets: [rootURI + "prefs.css"],
+      label: "Rhapsode",
+    });
+  } catch (e) {
+    log("prefs pane registration failed: " + e);   // never block startup
+  }
   // onMainWindowLoad only fires for windows opened after startup; when the
   // plugin is installed into a running Zotero, inject into existing windows
   for (const win of Zotero.getMainWindows()) {

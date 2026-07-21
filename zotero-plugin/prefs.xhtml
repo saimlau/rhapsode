@@ -1,0 +1,53 @@
+<!-- Zotero 7 preference pane. Parsed with parseXULToFragment, so this is a
+     FRAGMENT: no doctype, no wrapper document, XUL is the default namespace
+     and HTML elements need the html: prefix. Inputs with a `preference`
+     attribute are bound by Zotero itself - it syncs both directions with no
+     JavaScript at all, which is why this file ships no script. -->
+<vbox id="rhapsode-prefs">
+  <groupbox data-search-strings-raw="rhapsode server url auth password remote hosted">
+    <label><html:h2>Hosted server</html:h2></label>
+
+    <description class="rhapsode-note">
+      Leave the address empty to use a Rhapsode on this computer. Set it to
+      send papers to one running elsewhere instead.
+    </description>
+
+    <html:div class="rhapsode-grid">
+      <html:label for="rhapsode-server-url">Address</html:label>
+      <html:input type="url" id="rhapsode-server-url" dir="ltr"
+                  placeholder="https://rhapsode.example.com"
+                  preference="extensions.rhapsode.server_url"/>
+
+      <html:label for="rhapsode-server-auth">Sign-in</html:label>
+      <html:input type="text" id="rhapsode-server-auth" dir="ltr"
+                  placeholder="user:password"
+                  preference="extensions.rhapsode.server_auth"/>
+    </html:div>
+
+    <description class="rhapsode-note">
+      Sign-in is only needed if the server asks for one. It is sent to that
+      address on every request, so point it at a server you trust.
+    </description>
+  </groupbox>
+
+  <groupbox data-search-strings-raw="rhapsode local server port repository folder">
+    <label><html:h2>Local server</html:h2></label>
+
+    <description class="rhapsode-note">
+      Used when no address is set above. Give the folder you cloned Rhapsode
+      into and the plugin will start the server for you.
+    </description>
+
+    <html:div class="rhapsode-grid">
+      <html:label for="rhapsode-repo">Rhapsode folder</html:label>
+      <html:input type="text" id="rhapsode-repo" dir="ltr"
+                  placeholder="/home/you/rhapsode"
+                  preference="extensions.rhapsode.repo"/>
+
+      <html:label for="rhapsode-port">Port</html:label>
+      <html:input type="number" id="rhapsode-port" dir="ltr" min="1"
+                  max="65535" placeholder="7717"
+                  preference="extensions.rhapsode.port"/>
+    </html:div>
+  </groupbox>
+</vbox>

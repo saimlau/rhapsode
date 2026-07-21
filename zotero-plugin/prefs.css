@@ -1,0 +1,19 @@
+/* Two-column label/field grid, so the inputs line up rather than sitting at
+   whatever width their labels leave. Inherits Zotero's own colours and font. */
+#rhapsode-prefs .rhapsode-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 12px;
+  align-items: center;
+  margin: 6px 0;
+}
+
+#rhapsode-prefs .rhapsode-grid input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#rhapsode-prefs .rhapsode-note {
+  opacity: .8;
+  margin: 2px 0 6px;
+}

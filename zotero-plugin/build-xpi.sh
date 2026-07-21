@@ -14,9 +14,9 @@ if [ "${1:-}" = "--release" ]; then
   # themselves (or start the server manually) for autostart
   cat > "$PLUGIN_DIR/prefs.js" <<EOF
 pref("extensions.rhapsode.port", 7717);
-// Remote mode: point the plugin at a hosted Rhapsode instead of localhost.
-// Declared empty so both appear in Zotero's Config Editor — a pref with no
-// default cannot be found there, let alone edited.
+// Every pref the settings pane binds needs a default: Zotero renders the
+// literal string "undefined" in a field whose pref does not exist.
+pref("extensions.rhapsode.repo", "");
 pref("extensions.rhapsode.server_url", "");
 pref("extensions.rhapsode.server_auth", "");
 EOF
@@ -31,5 +31,5 @@ fi
 
 rm -f "$DIST/rhapsode.xpi"
 (cd "$PLUGIN_DIR" && zip -q "$DIST/rhapsode.xpi" \
-  manifest.json bootstrap.js prefs.js)
+  manifest.json bootstrap.js prefs.js prefs.xhtml prefs.css)
 echo "Built: $DIST/rhapsode.xpi"
