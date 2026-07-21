@@ -86,7 +86,6 @@ _cap = _collapsed.capitalize()
 assert (_cap if len(_cap) == len(_collapsed) else _collapsed) == _collapsed, \
     "must fall back rather than desync the mapping"
 
-print("all MappedText tests passed")
 
 # --- Greek letters: espeak reads the letters correctly ("ε" -> "epsilon"),
 # but a letter glued to its subscript becomes one token and is pronounced as
@@ -102,3 +101,22 @@ assert clean_text("5 µm") == "5 µ m"
 assert clean_text("5 μm") == "5 μ m"
 _mt = clean_mapped(MappedText.plain("where εx and εy are"))
 assert len(_mt.text) == len(_mt.meta), "inserted spaces must keep the mapping 1:1"
+
+# --- Maths letters and mojibake. Word writes equations in Cambria Math with a
+# broken ToUnicode map, so "x[k+1]" reaches the text layer as "𝑥ሾ𝑘൅1ሿ": the
+# letters are Mathematical Alphanumeric Symbols and the brackets decoded as
+# Ethiopic. espeak has no name for either and spells out the code point —
+# "letter one D four six five, ethiopic letter one two three E" — and switches
+# voice mid-sentence for the Malayalam "=".
+assert clean_text("angle 𝑥ሾ𝑘ሿ and input 𝑢ሾ𝑘ሿ.") == "angle x k and input u k ."
+assert clean_text("𝐸 denotes the yield stress.") == "E denotes the yield stress."
+# 𝛼 is Greek alpha from the maths block, not the Greek block: it must fold to
+# α so the Greek rules above see it at all
+assert clean_text("where 𝛼 is the angle") == "where α is the angle"
+assert clean_text("𝛼௜ and 𝛼௙") == "α and α"          # mojibake subscripts gone
+# ordinary text must pass through untouched
+assert clean_text("A normal sentence, unchanged.") == "A normal sentence, unchanged."
+_mt = clean_mapped(MappedText.plain("angle 𝑥ሾ𝑘ሿ here"))
+assert len(_mt.text) == len(_mt.meta), "folding must keep the mapping 1:1"
+
+print("all MappedText tests passed")

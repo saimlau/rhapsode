@@ -6,6 +6,7 @@ each sentence can report exactly which rectangles it occupies on which
 pages — the basis of the read-along sync manifest.
 """
 
+import unicodedata
 import re
 
 import fitz  # PyMuPDF
@@ -140,6 +141,33 @@ def _union(page, boxes):
 # interchangeably, so the same-looking text must narrate the same way
 GREEK_LETTERS = "\u0370-\u03ff\u1f00-\u1fff\u00b5"
 
+# Mathematical Alphanumeric Symbols: the italic/bold/script letters a Word or
+# LaTeX equation leaves in the text layer. 𝑘 is a k and 𝛼 is an alpha, but a
+# speech engine has no name for either and falls back to spelling the code
+# point — "letter one D four five eight". NFKC maps each to the plain letter
+# it is a variant of.
+# Built as a char->char table rather than a regex callback: MappedText.sub
+# takes a template, and every fold here is exactly one char to one char, so a
+# translation preserves the char/bbox mapping for free.
+MATH_ALPHANUMERIC = {
+    chr(cp): unicodedata.normalize("NFKC", chr(cp))
+    for cp in range(0x1D400, 0x1D800)
+    if unicodedata.normalize("NFKC", chr(cp)) != chr(cp)
+    and len(unicodedata.normalize("NFKC", chr(cp))) == 1
+}
+
+# Scripts that cannot appear in a paper this narrator can read, and in
+# practice never do: they are mojibake. Word writes equations in Cambria Math
+# with a broken ToUnicode map, so "x[k+1]" arrives as "𝑥ሾ𝑘൅1ሿ" — the brackets
+# decoded as Ethiopic, "=" as Malayalam. Left in, espeak spells each one out
+# ("ethiopic letter...") and even switches voice mid-sentence. Dropping them
+# cannot lose anything a English-language narrator could have said.
+UNREADABLE_SCRIPTS = re.compile(
+    "[\u0900-\u0dff"      # Devanagari … Sinhala (incl. Malayalam, Tamil, Oriya)
+    "\u1200-\u139f"       # Ethiopic
+    "\u1100-\u11ff"       # Hangul Jamo
+    "\uac00-\ud7af]")     # Hangul syllables
+
 
 def clean_mapped(mt):
     mt = mt.translate_chars(CHAR_FIXES)
@@ -147,6 +175,10 @@ def clean_mapped(mt):
     mt = mt.sub(r"\s*\n\s*", " ")             # join wrapped lines
     mt = mt.sub(CITATION_RE, "")              # [12], [8, 13-15]
     mt = mt.sub(r"(\d)\s*–\s*(\d)", r"\1 to \2")
+    # Fold maths letters to plain ones BEFORE the Greek rules below, so a
+    # folded 𝛼 is treated as the α it is
+    mt = mt.translate_chars(MATH_ALPHANUMERIC)
+    mt = mt.sub(UNREADABLE_SCRIPTS, " ")
     # A Greek letter glued to its subscript is one token to the phonemizer,
     # which then pronounces the pair as a word: "εx" -> "epsilonks", "σy" ->
     # "sigma-ee". espeak reads the letters themselves correctly, so only the
