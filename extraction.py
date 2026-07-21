@@ -135,12 +135,25 @@ def _union(page, boxes):
             round(max(b[2] for b in boxes), 2), round(max(b[3] for b in boxes), 2)]
 
 
+# Greek blocks: basic (α-ω, Α-Ω) plus the extended range used in maths, and
+# U+00B5 MICRO SIGN — visually identical to μ, and PDFs use the two
+# interchangeably, so the same-looking text must narrate the same way
+GREEK_LETTERS = "\u0370-\u03ff\u1f00-\u1fff\u00b5"
+
+
 def clean_mapped(mt):
     mt = mt.translate_chars(CHAR_FIXES)
     mt = mt.sub(r"(\w)-\n(\w)", r"\1\2")      # de-hyphenate line breaks
     mt = mt.sub(r"\s*\n\s*", " ")             # join wrapped lines
     mt = mt.sub(CITATION_RE, "")              # [12], [8, 13-15]
     mt = mt.sub(r"(\d)\s*–\s*(\d)", r"\1 to \2")
+    # A Greek letter glued to its subscript is one token to the phonemizer,
+    # which then pronounces the pair as a word: "εx" -> "epsilonks", "σy" ->
+    # "sigma-ee". espeak reads the letters themselves correctly, so only the
+    # boundary needs marking. mt.sub keeps the char/bbox mapping in step, so
+    # the read-along still highlights the original glyphs.
+    mt = mt.sub(f"([{GREEK_LETTERS}])([A-Za-z0-9])", r"\1 \2")
+    mt = mt.sub(f"([A-Za-z0-9])([{GREEK_LETTERS}])", r"\1 \2")
     mt = mt.sub(r"\s{2,}", " ")
     return mt.strip()
 

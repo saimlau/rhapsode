@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from extraction import MappedText, clean_mapped, split_sentences
+from extraction import MappedText, clean_mapped, clean_text, split_sentences
 
 B = lambda i: (0, (float(i), 0.0, float(i) + 1, 10.0))  # fake unit-wide boxes
 
@@ -87,3 +87,18 @@ assert (_cap if len(_cap) == len(_collapsed) else _collapsed) == _collapsed, \
     "must fall back rather than desync the mapping"
 
 print("all MappedText tests passed")
+
+# --- Greek letters: espeak reads the letters correctly ("ε" -> "epsilon"),
+# but a letter glued to its subscript becomes one token and is pronounced as
+# a word: "εx" -> "epsilonks", "σy" -> "sigma-ee". Only the boundary needs
+# marking, and mt.sub keeps char/bbox mapping in step so the read-along still
+# highlights the original glyphs.
+assert clean_text("where εx and εy are") == "where ε x and ε y are"
+assert clean_text("σmax at 2θ") == "σ max at 2 θ"
+assert clean_text("no greek here at all") == "no greek here at all"
+# U+00B5 MICRO SIGN and U+03BC GREEK MU look identical and PDFs use both;
+# the same-looking text must narrate the same way
+assert clean_text("5 µm") == "5 µ m"
+assert clean_text("5 μm") == "5 μ m"
+_mt = clean_mapped(MappedText.plain("where εx and εy are"))
+assert len(_mt.text) == len(_mt.meta), "inserted spaces must keep the mapping 1:1"
