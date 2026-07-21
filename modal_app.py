@@ -9,9 +9,7 @@ Setup (one time):
     pip install modal
     modal setup                      # authenticate your Modal account
     modal deploy modal_app.py        # prints the endpoint URL
-    # With REQUIRES_PROXY_AUTH = True
-# concurrent requests per container — each needs its own Kokoro pipeline
-MAX_CONCURRENT = 4 (the default below), create a proxy-auth
+    # With REQUIRES_PROXY_AUTH = True (the default below), create a proxy-auth
     # token at https://modal.com/settings/proxy-auth-tokens — NOT
     # `modal token new`, which mints ak-/as- CLI tokens and will 401 here.
     # The pair (wk-.../ws-...) is sent as the Modal-Key / Modal-Secret headers.
@@ -37,6 +35,10 @@ import modal
 # Set True to require Modal proxy-auth tokens on the endpoint (recommended
 # if you mind strangers who guess the URL spending your credits).
 REQUIRES_PROXY_AUTH = True
+# Concurrent requests per container. Each one needs its OWN Kokoro pipeline:
+# a shared pipeline's espeak backend keeps per-call state on the instance and
+# races across threads (see tests/test_tts_concurrency.py).
+MAX_CONCURRENT = 4
 
 app = modal.App("rhapsode-tts")
 
