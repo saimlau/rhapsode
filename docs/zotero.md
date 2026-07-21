@@ -26,6 +26,23 @@ your checkout lives: Zotero **Settings → Advanced → Config Editor**, create
 the preference `extensions.rhapsode.repo` with the path to the cloned repo.
 (A custom port goes in `extensions.rhapsode.port`.)
 
+### Using a hosted server
+
+The plugin can send papers to a Rhapsode running on another machine instead
+of on this one — see [Hosting on a server](hosting.md). In the Config Editor:
+
+| Preference | Value |
+| --- | --- |
+| `extensions.rhapsode.server_url` | `https://rhapsode.example.com` |
+| `extensions.rhapsode.server_auth` | `user:password`, if the server requires a login |
+
+Leave `server_url` empty for local mode, which is the default and behaves
+exactly as before. When it is set the plugin never starts a local server and
+`extensions.rhapsode.repo` is ignored — every upload and the library tab go
+to the remote host, so your laptop does no synthesis and needs no GPU.
+
+Requires plugin 0.3.2 or newer.
+
 For development, use `zotero-plugin/dev-install.sh` **while Zotero is
 closed** — it registers the source directory directly and pre-sets the
 repo path; `zotero-plugin/build-xpi.sh` builds the XPI.
@@ -34,8 +51,10 @@ repo path; `zotero-plugin/build-xpi.sh` builds the XPI.
 
 On first use the plugin checks for a running server and otherwise launches
 `rhapsode --gui --no-open` itself (via `rhapsode.bat` on Windows), then
-streams each PDF to `/api/papers/by-path` with its Zotero metadata and
-opens the library in a tab. Generation continues in the background — a
+streams each PDF to the server with its Zotero metadata and opens the
+library in a tab. Locally that upload is a path handoff (`/api/papers/by-path`
+— the server reads the file in place); against a hosted server the PDF itself
+is uploaded to `/api/papers`, since the remote machine cannot see your disk. Generation continues in the background — a
 large collection is queued in seconds and synthesizes one paper at a time.
 
 Combine with `[gui] idle_exit_min` in `config.toml` and the server also
