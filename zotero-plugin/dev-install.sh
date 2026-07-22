@@ -5,15 +5,28 @@ set -euo pipefail
 
 # match the executable name exactly (-x): a full-cmdline match (-f) would
 # match this script's own path, which contains "zotero"
-if pgrep -x zotero-bin > /dev/null 2>&1 || pgrep -x zotero > /dev/null 2>&1; then
+# the macOS app process is "Zotero"; Linux runs zotero-bin
+if pgrep -x zotero-bin > /dev/null 2>&1 || pgrep -x zotero > /dev/null 2>&1 \
+   || pgrep -x Zotero > /dev/null 2>&1; then
   echo "Zotero appears to be running — quit it first, then re-run this."
   exit 1
 fi
 
 PLUGIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Zotero keeps its profile in a different place on each platform
 PROFILE=$(ls -d "$HOME"/.zotero/zotero/*.default* 2>/dev/null | head -1)
+if [ -z "$PROFILE" ]; then   # macOS
+  PROFILE=$(ls -d "$HOME/Library/Application Support/Zotero/Profiles"/*.default* \
+            2>/dev/null | head -1)
+fi
+if [ -z "$PROFILE" ]; then   # Windows (git-bash / WSL reaching the host)
+  PROFILE=$(ls -d "$APPDATA/Zotero/Zotero/Profiles"/*.default* 2>/dev/null | head -1)
+fi
 if [ -z "$PROFILE" ]; then
-  echo "No Zotero profile found under ~/.zotero/zotero/"
+  echo "No Zotero profile found. Looked in:"
+  echo "  ~/.zotero/zotero/                                  (Linux)"
+  echo "  ~/Library/Application Support/Zotero/Profiles/     (macOS)"
+  echo "  \$APPDATA/Zotero/Zotero/Profiles/                   (Windows)"
   exit 1
 fi
 
