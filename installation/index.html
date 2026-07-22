@@ -1008,7 +1008,10 @@
 <h1 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h1>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Python 3.11+</strong> (the config loader uses the stdlib <code>tomllib</code>)</li>
+<li><strong>Python 3.11+</strong> (the config loader uses the stdlib <code>tomllib</code>).
+  On 3.9/3.10 — which is what macOS ships — install the backport
+  instead: <code>.venv/bin/pip install tomli</code>. Nothing else in Rhapsode
+  needs 3.11.</li>
 <li><strong>ffmpeg</strong> — audio encoding</li>
 <li><strong>espeak-ng</strong> — Kokoro's grapheme-to-phoneme fallback</li>
 <li>A GPU is strongly recommended for synthesis speed (NVIDIA CUDA or

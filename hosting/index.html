@@ -1214,15 +1214,19 @@ TLS, and its login is designed to sit behind one.</p>
 <span class="w">        </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:7717</span><span class="p">;</span>
 <span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">Host</span><span class="w"> </span><span class="nv">$host</span><span class="p">;</span>
 <span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-Proto</span><span class="w"> </span><span class="nv">$scheme</span><span class="p">;</span>
+<span class="w">        </span><span class="kn">proxy_set_header</span><span class="w"> </span><span class="s">X-Forwarded-For</span><span class="w"> </span><span class="nv">$remote_addr</span><span class="p">;</span><span class="w">   </span><span class="c1"># the app throttles</span>
+<span class="w">                                    </span><span class="c1"># per client; without this every caller</span>
+<span class="w">                                    </span><span class="c1"># looks like 127.0.0.1 and shares one bucket</span>
 <span class="w">        </span><span class="kn">proxy_buffering</span><span class="w"> </span><span class="no">off</span><span class="p">;</span><span class="w">        </span><span class="c1"># progress is streamed; buffering stalls it</span>
 <span class="w">        </span><span class="kn">proxy_read_timeout</span><span class="w"> </span><span class="s">3600s</span><span class="p">;</span><span class="w">   </span><span class="c1"># a long paper holds the connection</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>If you enable accounts, add rate limiting for the two unauthenticated
-endpoints — each login attempt costs a deliberate scrypt hash, so an
-unthrottled flood is a cheap way to pin the CPU — and stop logging invite
-tokens:</p>
+<p>If you enable accounts, add rate limiting. Every failed credential costs a
+deliberate scrypt hash — at the login form, on the join page, and in the HTTP
+Basic header that machine clients send on ordinary requests. The app throttles
+all three itself (so a misconfigured proxy is not a hole), but nginx is the
+cheaper first line. Also stop logging invite tokens:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># in the http { } block</span>
 <span class="k">limit_req_zone</span><span class="w"> </span><span class="nv">$binary_remote_addr</span><span class="w"> </span><span class="s">zone=rhapsode_auth:1m</span><span class="w"> </span><span class="s">rate=10r/m</span><span class="p">;</span>
 
