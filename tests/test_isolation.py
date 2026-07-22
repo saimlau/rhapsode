@@ -738,6 +738,97 @@ def test_a_login_flood_is_throttled():
     assert 429 in codes, f"no throttle: {sorted(set(codes))}"
 
 
+
+# --------------------------------------------------------------------
+# Third review pass (2026-07-21). The two HIGHs are regressions of the
+# second pass's own fixes — the pattern that keeps justifying another pass.
+# --------------------------------------------------------------------
+
+def test_basic_cache_is_not_poisoned_by_a_mutation_during_verify():
+    """TOCTOU: a delete committing DURING the scrypt used to be stamped with
+    the POST-mutation revision, marking a resurrected account 'current'. The
+    fix samples the revision BEFORE the hash, so the next lookup re-validates."""
+    app, _lib, users = _app()
+    c = TestClient(app)
+    hdr = {"Authorization": "Basic " + base64.b64encode(
+        b"mallory:mallory's long password").decode()}
+    # force the race deterministically: delete mallory the instant her hash is
+    # being checked, exactly the window the fix must cover
+    real_check = users.check
+
+    def racing_check(name, pw):
+        who = real_check(name, pw)
+        if name == "mallory":
+            users.delete("mallory")        # commits mid-"request"
+        return who
+
+    users.check = racing_check
+    try:
+        first = c.get("/api/library", headers=hdr).status_code
+    finally:
+        users.check = real_check
+    # whatever the first response, the account is now gone and every later
+    # request MUST be rejected — the cache must not have been stamped current
+    assert c.get("/api/library", headers=hdr).status_code == 401, \
+        "a deleted account survived in the Basic cache"
+
+
+def test_basic_auth_flood_is_throttled_too():
+    """The scrypt-flood the /login throttle stops must not just move to the
+    Authorization header."""
+    app, _lib, _u = _app()
+    c = TestClient(app)
+    codes = [c.get("/api/library", headers={
+        "Authorization": "Basic " + base64.b64encode(
+            f"mallory:wrong-{i}".encode()).decode()}).status_code
+        for i in range(30)]
+    assert 429 in codes, f"unbounded scrypt via Basic: {sorted(set(codes))}"
+
+
+def test_bare_non_finite_json_body_is_400_not_500():
+    """A top-level Infinity/NaN body crashed the default validation-error
+    handler when it echoed the value back through allow_nan=False."""
+    app, _lib, _u = _app()
+    c = TestClient(app, raise_server_exceptions=False)
+    h = _as(c, "mallory")
+    h["Content-Type"] = "application/json"
+    for raw in ("Infinity", "-Infinity", "NaN", "1e999"):
+        r = c.post("/api/papers/mallory-own/position", headers=h, content=raw)
+        assert r.status_code == 400, f"bare {raw} -> {r.status_code}"
+
+
+def test_sse_stream_ends_on_a_password_change():
+    """Deletion ended the stream but a password change did not — the epoch
+    revocation must reach the streaming channel, not only the next request."""
+    import asyncio
+    app, _lib, users = _app()
+    endpoint = next(r.endpoint for r in app.router.routes
+                    if getattr(r, "path", None) == "/api/events")
+    from starlette.requests import Request as SReq
+
+    async def run():
+        req = SReq({"type": "http", "headers": [], "method": "GET",
+                    "path": "/api/events", "query_string": b""})
+        req.state.user = "mallory"
+        resp = await endpoint(req)
+        it = resp.body_iterator
+        await it.__anext__()                 # first frame, stream established
+        users.set_password("mallory", "a brand new long password")
+        # the next tick must terminate rather than keep delivering her view
+        ended = False
+        for _ in range(4):
+            try:
+                await asyncio.wait_for(it.__anext__(), timeout=3)
+            except StopAsyncIteration:
+                ended = True
+                break
+            except asyncio.TimeoutError:
+                break
+        return ended
+
+    assert asyncio.run(run()), "the stream outlived the password change"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

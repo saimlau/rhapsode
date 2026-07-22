@@ -312,6 +312,16 @@ class Worker(threading.Thread):
 
 def create_app(lib, worker, auth_cfg=None, users=None):
     app = FastAPI(title="Rhapsode")
+
+    from fastapi.exceptions import RequestValidationError
+
+    @app.exception_handler(RequestValidationError)
+    async def _bad_request(request, exc):
+        # FastAPI's default handler echoes the offending input back, and a
+        # bare non-finite JSON float (Infinity / NaN) then crashes the response
+        # serializer (json.dumps(allow_nan=False)) into a 500. Return a fixed
+        # 400 that never re-serializes attacker input.
+        return JSONResponse({"detail": "invalid request body"}, status_code=400)
     auth_cfg = auth_cfg or {}
     secret = auth.load_secret(lib.root)
     multiuser = users is not None
@@ -385,6 +395,31 @@ def create_app(lib, worker, auth_cfg=None, users=None):
     # entry with the store's revision makes every entry stale the moment the
     # user table changes.
     _basic_ok = {}
+    _auth_state_lock = threading.Lock()   # _basic_ok, _attempts, _streams are
+                                          # now touched from threadpool workers
+
+    # A per-caller sliding-window throttle. nginx limit_req is the better place
+    # (docs/hosting.md), but the app must not depend on the proxy being
+    # configured: every miss on these paths costs a deliberate scrypt hash.
+    _attempts = {}
+
+    def _throttled(key, limit=10, window=60):
+        now = time.time()
+        with _auth_state_lock:
+            hits = [t for t in _attempts.get(key, []) if now - t < window]
+            _attempts[key] = hits + [now]
+            if len(_attempts) > 4096:         # bounded
+                _attempts.clear()
+            return len(hits) >= limit
+
+    def _client_ip(request):
+        # behind the documented nginx, the socket peer is 127.0.0.1 for
+        # everyone, which would collapse all callers into one bucket. Prefer
+        # the forwarded client when the proxy sets it.
+        fwd = request.headers.get("x-forwarded-for", "")
+        if fwd:
+            return fwd.split(",")[0].strip()
+        return request.client.host if request.client else "?"
 
     def _users_rev():
         return users.revision if multiuser else 0
@@ -402,6 +437,12 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             _user, _, pw = _b.b64decode(header[6:]).decode().partition(":")
         except Exception:
             return None
+        # Capture the revision BEFORE the ~tens-of-ms scrypt, not after. A
+        # delete or password-change committing DURING the hash bumps the live
+        # revision; stamping with the post-hash value would mark this stale
+        # result "current" and cache a resurrected account. Stamped with the
+        # pre-hash revision, the very next lookup is a miss and re-validates.
+        rev = _users_rev()
         who = (users.check(_user, pw) if multiuser else
                ("" if auth.verify_password(pw, auth_cfg.get("password_hash", ""))
                 else None))
@@ -409,7 +450,7 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             return None
         if len(_basic_ok) > 512:   # bounded in BOTH regimes: the single-user
             _basic_ok.clear()      # branch is the one that is live today
-        _basic_ok[key] = (who or None, _users_rev())
+        _basic_ok[key] = (who or None, rev)
         return who or True
 
     @app.middleware("http")
@@ -440,8 +481,18 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         # scrypt is deliberately expensive, and this middleware is async, so
         # verifying inline froze the whole event loop for every other client
         # for the duration — from an UNAUTHENTICATED request path.
-        basic = await run_in_threadpool(
-            _basic_valid, request.headers.get("authorization", ""))
+        header = request.headers.get("authorization", "")
+        if header.startswith("Basic "):
+            # A never-seen credential is a cache miss and a full scrypt hash,
+            # so the flood the /login throttle stops just moves here unless the
+            # Basic path is throttled too. A verified header (cache hit) is
+            # cheap and must not be throttled, so only unknown headers count.
+            import hashlib as _h
+            if _h.sha256(header.encode()).hexdigest() not in _basic_ok and \
+                    _throttled(f"basic:{_client_ip(request)}", limit=20):
+                return JSONResponse({"detail": "too many attempts"},
+                                    status_code=429)
+        basic = await run_in_threadpool(_basic_valid, header)
         if basic:
             request.state.user = basic if isinstance(basic, str) else None
             return await call_next(request)
@@ -469,23 +520,10 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                         max_age=auth.DEFAULT_TTL, path="/")
         return resp
 
-    # nginx limit_req is the right place for this (see docs/hosting.md), but
-    # the app must not depend on a correctly configured proxy for it: each
-    # attempt costs a deliberate scrypt hash.
-    _attempts = {}
-
-    def _throttled(key):
-        now = time.time()
-        hits = [t for t in _attempts.get(key, []) if now - t < 60]
-        _attempts[key] = hits + [now]
-        if len(_attempts) > 4096:            # bounded
-            _attempts.clear()
-        return len(hits) >= 10
-
     @app.post("/login")
     def login_submit(request: Request, username: str = Form(""),
                      password: str = Form("")):
-        if _throttled(f"login:{request.client.host if request.client else '?'}"):
+        if _throttled(f"login:{_client_ip(request)}"):
             raise HTTPException(429, "too many attempts; wait a minute")
         who = users.check(username, password) if multiuser else (
             "" if auth.verify_password(password,
@@ -790,7 +828,10 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             return None
         fields = {k: body[k] for k in ("title", "authors") if body.get(k)}
         if body.get("year"):
-            fields["year"] = int(body["year"])
+            try:
+                fields["year"] = int(body["year"])
+            except (TypeError, ValueError):
+                pass          # a junk year is dropped, not a 500 after ingest
         if fields:
             fields["meta_locked"] = True
             lib.update(pid, **fields)
@@ -1039,13 +1080,18 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         if _streams.get(who, 0) >= 8:
             raise HTTPException(429, "too many open event streams")
         _streams[who] = _streams.get(who, 0) + 1
+        opened_epoch = users.epoch(who) if multiuser and who else None
 
         async def gen():
             last, idle = 0, 0
             while True:
-                # a stream opened before the account was deleted would keep
-                # delivering that user's view forever; one dict lookup a tick
-                if multiuser and who is not None and not users.exists(who):
+                # a stream opened before the account was deleted OR its
+                # password changed would otherwise keep delivering that user's
+                # view for the life of the socket — the revocation the epoch
+                # promises must reach the streaming channel too
+                if multiuser and who is not None and (
+                        not users.exists(who)
+                        or users.epoch(who) != opened_epoch):
                     return
                 v = lib.version
                 if v != last:

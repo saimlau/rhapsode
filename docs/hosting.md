@@ -124,16 +124,20 @@ server {
         proxy_pass http://127.0.0.1:7717;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;   # the app throttles
+                                    # per client; without this every caller
+                                    # looks like 127.0.0.1 and shares one bucket
         proxy_buffering off;        # progress is streamed; buffering stalls it
         proxy_read_timeout 3600s;   # a long paper holds the connection
     }
 }
 ```
 
-If you enable accounts, add rate limiting for the two unauthenticated
-endpoints — each login attempt costs a deliberate scrypt hash, so an
-unthrottled flood is a cheap way to pin the CPU — and stop logging invite
-tokens:
+If you enable accounts, add rate limiting. Every failed credential costs a
+deliberate scrypt hash — at the login form, on the join page, and in the HTTP
+Basic header that machine clients send on ordinary requests. The app throttles
+all three itself (so a misconfigured proxy is not a hole), but nginx is the
+cheaper first line. Also stop logging invite tokens:
 
 ```nginx
 # in the http { } block
