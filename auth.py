@@ -16,6 +16,7 @@ puts the hash in config.toml under [auth] password_hash.
 import base64
 import json
 import re
+import threading
 import hashlib
 import hmac
 import os
@@ -130,6 +131,10 @@ class Users:
     def __init__(self, library_root):
         self.path = Path(library_root) / USERS_FILE
         self.data = {"users": {}, "invites": {}}
+        # bumped on every mutation; callers that cache a verified credential
+        # stamp it with this and re-verify when it moves
+        self.revision = 0
+        self.lock = threading.RLock()
         self.load()
 
     # -- persistence ---------------------------------------------------
@@ -143,6 +148,7 @@ class Users:
         return self.data
 
     def save(self):
+        self.revision += 1
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -221,15 +227,29 @@ class Users:
         return bool(inv and not inv["used_by"] and inv["expires"] > _now())
 
     def redeem(self, token, name, password):
-        """Create the account this invite is for, and burn the invite."""
+        """Create the account this invite is for, and burn the invite.
+
+        Held under the lock end to end: checking the invite, creating the
+        account and burning the link have to be one step, or two requests
+        arriving together both pass the check and one link mints two accounts.
+        """
         key = _token_key(token or "")
-        if not self.invite_ok(token):
-            raise ValueError("this invite link is invalid, used or expired")
-        created = self.create(name, password)
-        self.data["invites"][key]["used_by"] = created
-        self.data["invites"][key]["used_at"] = _now()
-        self.save()
-        return created
+        with self.lock:
+            if not self.invite_ok(token):
+                raise ValueError("this invite link is invalid, used or expired")
+            # claim the invite BEFORE creating the account: if creation fails
+            # the claim is rolled back below, but no concurrent caller can slip
+            # between the check and the claim
+            self.data["invites"][key]["used_by"] = "(claiming)"
+            try:
+                created = self.create(name, password)
+            except Exception:
+                self.data["invites"][key]["used_by"] = None   # still usable
+                raise
+            self.data["invites"][key]["used_by"] = created
+            self.data["invites"][key]["used_at"] = _now()
+            self.save()
+            return created
 
     def open_invites(self):
         return [{"by": v["by"], "created": v["created"], "expires": v["expires"]}

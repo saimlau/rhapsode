@@ -317,6 +317,179 @@ def test_single_user_mode_is_untouched():
     assert c.get("/api/library").status_code == 200
 
 
+
+# ---------------------------------------------------------------------
+# Regressions from the adversarial security review (2026-07-21). Each of
+# these passed review-free code and failed the review; they exist so the
+# hole cannot reopen quietly.
+# ---------------------------------------------------------------------
+
+def test_sse_stream_does_not_push_other_users_papers():
+    """The stream is a read path like /api/library, and it pushed the ENTIRE
+    registry to every open tab — handing every user every other user's paper
+    ids, titles and error strings. library.html opens it on page load, so this
+    was the leak that made the guessable ids usable."""
+    import asyncio
+    from starlette.requests import Request as SReq
+    app, _lib, _u = _app()
+
+    endpoint = next(r.endpoint for r in app.router.routes
+                    if getattr(r, "path", None) == "/api/events")
+
+    async def first_data_frame():
+        req = SReq({"type": "http", "headers": [], "method": "GET",
+                    "path": "/api/events", "query_string": b""})
+        req.state.user = "mallory"          # what the auth gate would set
+        resp = await endpoint(req)
+        async for chunk in resp.body_iterator:
+            if str(chunk).startswith("data:"):
+                return str(chunk)
+        return ""
+
+    frame = asyncio.run(first_data_frame())
+    assert frame, "the stream must push an initial snapshot"
+    assert "alice-secret" not in frame, f"SSE leaked a private paper: {frame[:200]}"
+    assert "CONFIDENTIAL" not in frame
+    assert "mallory-own" in frame, "the caller's own papers must still arrive"
+
+
+def test_by_path_ingest_is_refused_when_accounts_are_on():
+    """It reads an arbitrary path off the server's disk — right for a
+    localhost install, catastrophic on a shared host: a user could name
+    another user's paper.pdf and have it ingested into their own shelf."""
+    app, lib, _u = _app()
+    c = TestClient(app)
+    victim = str((lib.root / "alice-secret" / "paper.pdf").resolve())
+    r = c.post("/api/papers/by-path", headers=_as(c, "mallory"),
+               json={"path": victim})
+    assert r.status_code == 404, f"by-path must not exist in multiuser: {r.status_code}"
+    assert len(lib.data["papers"]) == 3, "no new paper may have been created"
+
+
+def test_playlists_belong_to_someone():
+    app, lib, _u = _app()
+    c = TestClient(app)
+    alice, mallory = _as(c, "alice"), _as(c, "mallory")
+    plid = c.post("/api/playlists", headers=alice,
+                  json={"name": "Job applications"}).json()["id"]
+    # a stranger can neither see, rename, nor destroy it
+    assert c.put(f"/api/playlists/{plid}", headers=mallory,
+                 json={"name": "pwned"}).status_code == 404
+    assert c.delete(f"/api/playlists/{plid}", headers=mallory).status_code == 404
+    assert plid in lib.data["playlists"]
+    assert lib.data["playlists"][plid]["name"] == "Job applications"
+    # nor is it listed to them
+    assert plid not in c.get("/api/library", headers=mallory).json()["playlists"]
+    # the owner still can
+    assert c.delete(f"/api/playlists/{plid}", headers=alice).status_code == 200
+
+
+def test_two_users_may_both_have_a_playlist_called_reading():
+    app, lib, _u = _app()
+    c = TestClient(app)
+    a = c.post("/api/playlists", headers=_as(c, "alice"),
+               json={"name": "Reading"}).json()["id"]
+    m = c.post("/api/playlists", headers=_as(c, "mallory"),
+               json={"name": "Reading"}).json()["id"]
+    assert a != m, "identically named playlists must not be the same object"
+
+
+def test_playlist_add_is_not_an_existence_oracle():
+    """It validated with the raw registry lookup, so a real-but-invisible id
+    returned 200 and a bogus one 404 — confirming whether a colleague holds a
+    specific document."""
+    app, _lib, _u = _app()
+    c = TestClient(app)
+    h = _as(c, "mallory")
+    plid = c.post("/api/playlists", headers=h, json={"name": "Mine"}).json()["id"]
+    real = c.post(f"/api/playlists/{plid}/papers", headers=h,
+                  json={"id": "alice-secret"})
+    bogus = c.post(f"/api/playlists/{plid}/papers", headers=h,
+                   json={"id": "no-such-paper"})
+    assert real.status_code == bogus.status_code == 404
+
+
+def test_basic_auth_cache_does_not_outlive_the_account():
+    """Caching the scrypt result keeps Basic usable for machine clients, but
+    an entry with no invalidation kept a deleted user working."""
+    app, _lib, users = _app()
+    c = TestClient(app)
+    hdr = {"Authorization": "Basic " + base64.b64encode(
+        b"mallory:mallory's long password").decode()}
+    assert c.get("/api/library", headers=hdr).status_code == 200   # caches it
+    users.delete("mallory")
+    assert c.get("/api/library", headers=hdr).status_code == 401, \
+        "a deleted account must lose access immediately"
+
+
+def test_basic_auth_cache_does_not_outlive_a_password_change():
+    app, _lib, users = _app()
+    c = TestClient(app)
+    hdr = {"Authorization": "Basic " + base64.b64encode(
+        b"mallory:mallory's long password").decode()}
+    assert c.get("/api/library", headers=hdr).status_code == 200
+    users.set_password("mallory", "a brand new password")
+    assert c.get("/api/library", headers=hdr).status_code == 401, \
+        "the old password must stop working"
+
+
+def test_status_counts_only_what_you_can_see():
+    app, _lib, _u = _app()
+    c = TestClient(app)
+    st = c.get("/api/status", headers=_as(c, "mallory")).json()
+    assert sum(st["papers"].values()) == 2, \
+        f"global counts reveal other users' uploads: {st['papers']}"
+
+
+def test_uploading_a_shared_paper_does_not_rewrite_its_metadata():
+    """Re-adding a shared paper used to overwrite its owner's title/authors
+    and lock them."""
+    app, lib, _u = _app()
+    c = TestClient(app)
+    before = lib.data["papers"]["alice-published"]["title"]
+    pdf = (lib.root / "alice-published" / "paper.pdf").read_bytes()
+    c.post("/api/papers", headers=_as(c, "mallory"),
+           files={"file": ("x.pdf", pdf, "application/pdf")},
+           data={"title": "MALLORY'S TITLE", "authors": "Mallory"})
+    assert lib.data["papers"]["alice-published"]["title"] == before
+
+
+def test_a_readers_position_does_not_move_the_owners():
+    app, lib, _u = _app()
+    c = TestClient(app)
+    c.post("/api/papers/alice-published/position", headers=_as(c, "mallory"),
+           json={"t": 42.0})
+    assert lib.data["papers"]["alice-published"]["resume_t"] == 0.0, \
+        "a reader must not move the owner's place"
+    mine = c.get("/api/library", headers=_as(c, "mallory")
+                 ).json()["papers"]["alice-published"]["resume_t"]
+    assert mine == 42.0, "but the reader must keep their own"
+
+
+def test_one_invite_cannot_mint_two_accounts_concurrently():
+    """Check-then-create is not atomic unless it is held under one lock."""
+    import threading
+    root = Path(tempfile.mkdtemp())
+    users = auth.Users(root)
+    users.create("boss", "a long enough password", admin=True)
+    tok = users.mint_invite("boss")
+    made, errors = [], []
+
+    def go(i):
+        try:
+            made.append(users.redeem(tok, f"racer{i}", "a long enough password"))
+        except ValueError as e:
+            errors.append(str(e))
+
+    ts = [threading.Thread(target=go, args=(i,)) for i in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len(made) == 1, f"a single-use invite minted {len(made)} accounts"
+    assert len(errors) == 7
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -114,12 +114,17 @@ class Library:
             else:
                 self.touch(bump)
 
-    def playlist_by_name(self, name):
-        """Find-or-create a playlist; the slug id makes repeats idempotent."""
+    def playlist_by_name(self, name, owner=None):
+        """Find-or-create a playlist; the slug id makes repeats idempotent.
+        The slug is namespaced per owner, or two users who both create
+        "Reading" would silently share one playlist."""
         with self.lock:
             plid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "pl"
+            if owner:
+                plid = f"{owner}--{plid}"
             if plid not in self.data["playlists"]:
-                self.data["playlists"][plid] = {"name": name, "order": []}
+                self.data["playlists"][plid] = {"name": name, "order": [],
+                                                "owner": owner}
                 self.save()
             return plid
 
@@ -340,15 +345,25 @@ def create_app(lib, worker, auth_cfg=None, users=None):
 
     # scrypt is deliberately slow, so remember Basic headers that already
     # verified — machine clients (the Zotero plugin) send one per request
-    _basic_ok = {}          # header hash -> username (None in single-user)
+    # header hash -> (username, users-version). Caching the scrypt result is
+    # what keeps Basic auth usable for machine clients, but a cache with no
+    # invalidation outlives the account: a deleted user, or one whose password
+    # was changed, kept working until the process restarted. Stamping each
+    # entry with the store's revision makes every entry stale the moment the
+    # user table changes.
+    _basic_ok = {}
+
+    def _users_rev():
+        return users.revision if multiuser else 0
 
     def _basic_valid(header):
         if not header.startswith("Basic "):
             return None
         import hashlib as _h
         key = _h.sha256(header.encode()).hexdigest()
-        if key in _basic_ok:
-            return _basic_ok[key] or True
+        hit = _basic_ok.get(key)
+        if hit is not None and hit[1] == _users_rev():
+            return hit[0] or True
         try:
             import base64 as _b
             _user, _, pw = _b.b64decode(header[6:]).decode().partition(":")
@@ -357,11 +372,13 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         if multiuser:
             who = users.check(_user, pw)
             if who:
-                _basic_ok[key] = who
+                if len(_basic_ok) > 512:      # bounded: not a memory sink
+                    _basic_ok.clear()
+                _basic_ok[key] = (who, _users_rev())
                 return who
             return None
         if auth.verify_password(pw, auth_cfg.get("password_hash", "")):
-            _basic_ok[key] = None
+            _basic_ok[key] = (None, 0)
             return True
         return None
 
@@ -509,12 +526,7 @@ def create_app(lib, worker, auth_cfg=None, users=None):
 
     @app.get("/api/dashboard")
     def dashboard_data(request: Request):
-        snap = lib.snapshot()
-        who = caller(request)
-        if multiuser and who is not None:
-            snap["papers"] = {pid: e for pid, e in snap["papers"].items()
-                              if visible(e, who)}
-            snap["order"] = [x for x in snap["order"] if x in snap["papers"]]
+        snap = _scoped(caller(request))
         papers = snap["papers"]
         by_status = {}
         hours = 0.0
@@ -571,19 +583,31 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                                 status_code=500)
         return page.read_text(encoding="utf-8")
 
+    def _scoped(who):
+        """The registry as `who` may see it. ONE implementation, used by the
+        library, the dashboard and the SSE stream — three copies of this rule
+        is how the stream came to leak while the other two were correct."""
+        snap = lib.snapshot()
+        if not multiuser or who is None:
+            return snap
+        snap["papers"] = {pid: e for pid, e in snap["papers"].items()
+                          if visible(e, who)}
+        for e in snap["papers"].values():
+            # a reader of a shared paper keeps their own place in it
+            by = e.pop("resume_by", None) or {}
+            if e.get("owner") != who and who in by:
+                e["resume_t"] = by[who]
+        snap["order"] = [pid for pid in snap["order"] if pid in snap["papers"]]
+        snap["playlists"] = {
+            plid: {**pl, "order": [pid for pid in pl["order"]
+                                   if pid in snap["papers"]]}
+            for plid, pl in snap.get("playlists", {}).items()
+            if pl.get("owner") in (None, who) or users.is_admin(who)}
+        return snap
+
     @app.get("/api/library")
     def get_library(request: Request):
-        snap = lib.snapshot()
-        who = caller(request)
-        if multiuser and who is not None:
-            snap["papers"] = {pid: e for pid, e in snap["papers"].items()
-                              if visible(e, who)}
-            snap["order"] = [pid for pid in snap["order"]
-                             if pid in snap["papers"]]
-            for pl in snap.get("playlists", {}).values():
-                pl["order"] = [pid for pid in pl["order"]
-                               if pid in snap["papers"]]
-        return snap
+        return _scoped(caller(request))
 
     def _ingest(filename, data, owner=None):
         if len(data) > MAX_UPLOAD:
@@ -591,6 +615,11 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         if not data.startswith(b"%PDF"):
             raise HTTPException(400, f"{filename}: not a PDF")
         digest = hashlib.sha1(data).hexdigest()[:10]
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-",
+                      Path(filename or "paper").stem)[:40].strip("-.")
+        # dedupe check and id choice happen under ONE lock: apart, two users
+        # uploading the same PDF at once both saw "no match" and then raced
+        # for the same directory
         with lib.lock:
             for pid, entry in lib.data["papers"].items():
                 # dedupe only against papers this caller can already see:
@@ -598,14 +627,22 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                 # private paper would confirm they hold it
                 if entry.get("hash") == digest and visible(entry, owner):
                     return JSONResponse({"id": pid, "duplicate": True})
-        slug = re.sub(r"[^A-Za-z0-9._-]+", "-",
-                      Path(filename or "paper").stem)[:40].strip("-.")
-        pid = f"{slug or 'paper'}-{digest}"
-        if owner and pid in lib.data["papers"]:
-            pid = f"{pid}-{owner}"      # same PDF, another user's own copy
-        paper_dir = lib.root / pid
-        paper_dir.mkdir(parents=True, exist_ok=True)
-        (paper_dir / "paper.pdf").write_bytes(data)
+            pid = f"{slug or 'paper'}-{digest}"
+            if pid in lib.data["papers"]:
+                pid = f"{pid}-{owner}" if owner else pid
+                n = 2
+                while pid in lib.data["papers"]:
+                    pid, n = f"{slug}-{digest}-{owner or 'x'}-{n}", n + 1
+            lib.data["papers"][pid] = {"id": pid, "status": "reserving",
+                                       "hash": digest, "owner": owner}
+        try:
+            paper_dir = lib.root / pid
+            paper_dir.mkdir(parents=True, exist_ok=True)
+            (paper_dir / "paper.pdf").write_bytes(data)
+        except Exception:
+            with lib.lock:                     # release the reserved id
+                lib.data["papers"].pop(pid, None)
+            raise
 
         entry = {"id": pid, "hash": digest, "filename": filename,
                  "title": Path(filename or pid).stem, "authors": None,
@@ -630,9 +667,15 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             worker.enqueue(pid)
         return JSONResponse({"id": pid, "duplicate": False})
 
-    def _apply_meta(pid, body):
+    def _apply_meta(pid, body, who=None):
         """Curated (Zotero) metadata is authoritative: apply + lock it, and
         optionally append to a named playlist. Returns plid or None."""
+        # ...but only for a paper this caller owns. Uploading a copy of a
+        # SHARED paper used to rewrite its owner's title/authors/year and lock
+        # them, letting one user edit another's metadata by re-adding it.
+        entry = lib.paper(pid)
+        if multiuser and who is not None and entry.get("owner") not in (None, who):
+            return None
         fields = {k: body[k] for k in ("title", "authors") if body.get(k)}
         if body.get("year"):
             fields["year"] = int(body["year"])
@@ -642,7 +685,7 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         name = str(body.get("playlist", "")).strip()
         if not name:
             return None
-        plid = lib.playlist_by_name(name)
+        plid = lib.playlist_by_name(name, owner=who)
         with lib.lock:
             order = lib.data["playlists"][plid]["order"]
             if pid not in order:
@@ -658,7 +701,8 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                        caller(request))
         pid = json.loads(resp.body)["id"]
         plid = _apply_meta(pid, {"title": title, "authors": authors,
-                                 "year": year, "playlist": playlist})
+                                 "year": year, "playlist": playlist},
+                           caller(request))
         if plid:
             return JSONResponse({**json.loads(resp.body), "playlist": plid})
         return resp
@@ -667,67 +711,93 @@ def create_app(lib, worker, auth_cfg=None, users=None):
     def add_by_path(request: Request, body: dict):
         """Ingest a local PDF by absolute path (used by the Zotero plugin
         against a localhost server; remote plugins upload via /api/papers)."""
+        # This route reads an arbitrary path off the server's own disk. That is
+        # exactly right for a localhost install, where the caller IS the owner
+        # of the filesystem, and catastrophic on a shared host: a user could
+        # name another user's <root>/<pid>/paper.pdf — or any file on the box —
+        # and have it ingested into their own shelf. Remote clients already
+        # upload bytes through POST /api/papers, so the route simply does not
+        # exist when accounts are on.
+        if multiuser:
+            raise HTTPException(404, "not found")
         src = Path(str(body.get("path", ""))).expanduser()
         if not src.is_file():
             raise HTTPException(404, f"no such file: {src}")
         resp = _ingest(src.name, src.read_bytes(), caller(request))
         pid = json.loads(resp.body)["id"]
-        plid = _apply_meta(pid, body)
+        plid = _apply_meta(pid, body, caller(request))
         if plid:
             return JSONResponse({**json.loads(resp.body), "playlist": plid})
         return resp
 
-    @app.post("/api/playlists")
-    def create_playlist(body: dict):
-        name = str(body.get("name", "")).strip()
-        if not name:
-            raise HTTPException(400, "playlist name required")
-        return {"id": lib.playlist_by_name(name)}
-
-    @app.put("/api/playlists/{plid}")
-    def update_playlist(plid: str, body: dict):
+    # Playlists predate accounts and had NO ownership at all: any user could
+    # rename or delete anyone's, every name was globally visible, and two
+    # users who both made "Reading" silently shared one object. They now carry
+    # an owner and go through the same shape of check as papers.
+    def own_playlist(plid, request):
+        who = caller(request)
         with lib.lock:
             pl = lib.data["playlists"].get(plid)
             if not pl:
                 raise HTTPException(404, "unknown playlist")
+            if multiuser and who is not None:
+                owner = pl.get("owner")
+                if owner is not None and owner != who and not users.is_admin(who):
+                    raise HTTPException(404, "unknown playlist")
+            return pl
+
+    @app.post("/api/playlists")
+    def create_playlist(request: Request, body: dict):
+        name = str(body.get("name", "")).strip()
+        if not name:
+            raise HTTPException(400, "playlist name required")
+        return {"id": lib.playlist_by_name(name, owner=caller(request))}
+
+    @app.put("/api/playlists/{plid}")
+    def update_playlist(plid: str, request: Request, body: dict):
+        pl = own_playlist(plid, request)
+        who = caller(request)
+        with lib.lock:
             if body.get("name"):
                 pl["name"] = str(body["name"]).strip()
             if "order" in body:
-                if sorted(body["order"]) != sorted(pl["order"]):
+                # compare against the caller-visible slice and splice it back,
+                # or the response is an oracle for members they cannot see
+                mine = [pid for pid in pl["order"]
+                        if pid in lib.data["papers"]
+                        and visible(lib.data["papers"][pid], who)]
+                if sorted(body["order"]) != sorted(mine):
                     raise HTTPException(400, "order must contain exactly the "
-                                             "playlist's papers")
-                pl["order"] = body["order"]
+                                             "playlist papers you can see")
+                it = iter(body["order"])
+                pl["order"] = [next(it) if pid in set(mine) else pid
+                               for pid in pl["order"]]
             lib.save()
         return {"ok": True}
 
     @app.delete("/api/playlists/{plid}")
-    def delete_playlist(plid: str):
+    def delete_playlist(plid: str, request: Request):
+        own_playlist(plid, request)
         with lib.lock:
-            if plid not in lib.data["playlists"]:
-                raise HTTPException(404, "unknown playlist")
             del lib.data["playlists"][plid]
             lib.save()
         return {"ok": True}
 
     @app.post("/api/playlists/{plid}/papers")
-    def playlist_add(plid: str, body: dict):
+    def playlist_add(plid: str, request: Request, body: dict):
         pid = str(body.get("id", ""))
-        lib.paper(pid)
-        with lib.lock:
-            pl = lib.data["playlists"].get(plid)
-            if not pl:
-                raise HTTPException(404, "unknown playlist")
+        see(pid, request)          # NOT lib.paper(): that answered 200 for a
+        pl = own_playlist(plid, request)   # real-but-invisible id, 404 for a
+        with lib.lock:                     # bogus one — an existence oracle
             if pid not in pl["order"]:
                 pl["order"].append(pid)
                 lib.save()
         return {"ok": True}
 
     @app.delete("/api/playlists/{plid}/papers/{pid}")
-    def playlist_remove(plid: str, pid: str):
+    def playlist_remove(plid: str, pid: str, request: Request):
+        pl = own_playlist(plid, request)
         with lib.lock:
-            pl = lib.data["playlists"].get(plid)
-            if not pl:
-                raise HTTPException(404, "unknown playlist")
             pl["order"] = [x for x in pl["order"] if x != pid]
             lib.save()
         return {"ok": True}
@@ -761,7 +831,15 @@ def create_app(lib, worker, auth_cfg=None, users=None):
 
     @app.post("/api/papers/{pid}/position")
     def position(pid: str, request: Request, body: dict):
-        see(pid, request)
+        entry = see(pid, request)
+        who = caller(request)
+        if multiuser and who is not None and entry.get("owner") != who:
+            # a shared paper is read by several people; one listener's place
+            # must not move everyone else's. Non-owners keep their own.
+            with lib.lock:
+                entry.setdefault("resume_by", {})[who] = float(body.get("t", 0))
+                lib.touch(bump=False)
+            return {"ok": True}
         # in-memory immediately, disk at most every 30 s (worst case on a
         # crash: the resume point is half a minute stale)
         lib.update(pid, bump=False, persist=False,
@@ -769,11 +847,14 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         return {"ok": True}
 
     @app.get("/api/status")
-    def status_endpoint():
+    def status_endpoint(request: Request):
         import grobid
+        who = caller(request)
         with lib.lock:
             counts = {}
             for p in lib.data["papers"].values():
+                if not visible(p, who):   # counting everyone's papers told a
+                    continue              # user how many others had uploaded
                 counts[p["status"]] = counts.get(p["status"], 0) + 1
         return {"kokoro": p2a.pipeline_status(),
                 "grobid": grobid.status(),
@@ -811,22 +892,28 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             lib.save()
         return {"ok": True}
 
-    payload_cache = {"v": -1, "body": ""}
+    payload_cache = {"key": None, "body": ""}
 
     @app.get("/api/events")
-    async def events():
+    async def events(request: Request):
         # async generator: SSE clients cost zero threadpool tokens (the old
         # sync version pinned one of ~40 pool threads per open tab), and the
-        # serialized snapshot is shared across clients per version
+        # serialized snapshot is shared across clients per version.
+        # The stream is a READ PATH like /api/library and must filter the same
+        # way: it previously pushed the whole registry to every open tab, which
+        # handed every user every other user's paper ids, titles and errors.
+        who = caller(request)
         async def gen():
             last, idle = 0, 0
             while True:
                 v = lib.version
                 if v != last:
                     last, idle = v, 0
-                    if payload_cache["v"] != v:
-                        payload_cache["v"] = v
-                        payload_cache["body"] = json.dumps(lib.snapshot())
+                    # cache per (version, viewer): one viewer's filtered
+                    # payload must never be served to the next one
+                    if payload_cache.get("key") != (v, who):
+                        payload_cache["key"] = (v, who)
+                        payload_cache["body"] = json.dumps(_scoped(who))
                     yield f"data: {payload_cache['body']}\n\n"
                 elif idle >= 20:
                     idle = 0
