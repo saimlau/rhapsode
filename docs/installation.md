@@ -2,7 +2,10 @@
 
 ## Prerequisites
 
-- **Python 3.11+** (the config loader uses the stdlib `tomllib`)
+- **Python 3.11+** (the config loader uses the stdlib `tomllib`).
+  On 3.9/3.10 — which is what macOS ships — install the backport
+  instead: `.venv/bin/pip install tomli`. Nothing else in Rhapsode
+  needs 3.11.
 - **ffmpeg** — audio encoding
 - **espeak-ng** — Kokoro's grapheme-to-phoneme fallback
 - A GPU is strongly recommended for synthesis speed (NVIDIA CUDA or

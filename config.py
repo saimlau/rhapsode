@@ -3,8 +3,24 @@
 Precedence: CLI flags > config.toml (repo root, gitignored) > DEFAULTS.
 """
 
-import tomllib
 from pathlib import Path
+
+# tomllib is stdlib from Python 3.11. On 3.9/3.10 the identical parser is
+# available as the `tomli` package — the rest of Rhapsode uses no 3.11-only
+# syntax, so falling back keeps those interpreters working rather than
+# failing with a bare "No module named 'tomllib'" at the first run.
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - depends on interpreter
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        import sys
+        v = ".".join(str(n) for n in sys.version_info[:3])
+        raise SystemExit(
+            f"error: reading config.toml needs Python 3.11+ (you have {v}).\n"
+            f"  Either use a newer Python, or install the backport into this\n"
+            f"  environment:  {sys.executable} -m pip install tomli") from None
 
 DEFAULTS = {
     "library": {"path": "~/PaperAudio"},
