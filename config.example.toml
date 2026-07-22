@@ -107,3 +107,18 @@ autostart = true
 # Stop a GROBID service we started after this much idle time (its JVM
 # holds 2-4 GB RAM); it restarts automatically on the next paper.
 idle_stop_s = 600
+
+# ------------------------------------------------------------------ accounts
+# Only for a hosted install. A local install needs none of this.
+#
+# With password_hash alone the whole library sits behind one password.
+# Setting multiuser = true additionally turns on named accounts: the existing
+# password becomes admin_user's, every existing paper becomes theirs and
+# private, and colleagues join through invite links you create at /admin.
+# See docs/hosting.md — read it before flipping this, and back up
+# library.json and users.json first.
+#
+# [auth]
+# password_hash = "scrypt$..."   # python -c "import auth; print(auth.hash_password('...'))"
+# multiuser = false
+# admin_user = "admin"

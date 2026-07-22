@@ -280,9 +280,24 @@ class Users:
             self.save()
             return created
 
+    def revoke_invite(self, token_key):
+        """Withdraw an unused invite by its stored key. A link that cannot be
+        withdrawn is a bearer credential with a two-week life — and it travels
+        in a URL, so it lands in browser history, chat logs and nginx's
+        access log."""
+        with self.lock:
+            inv = self.data["invites"].get(token_key)
+            if not inv:
+                raise ValueError("no such invite")
+            if inv["used_by"]:
+                raise ValueError("that invite has already been used")
+            del self.data["invites"][token_key]
+            self.save()
+
     def open_invites(self):
-        return [{"by": v["by"], "created": v["created"], "expires": v["expires"]}
-                for v in self.data["invites"].values()
+        return [{"key": k, "by": v["by"], "created": v["created"],
+                 "expires": v["expires"]}
+                for k, v in self.data["invites"].items()
                 if not v["used_by"] and v["expires"] > _now()]
 
 

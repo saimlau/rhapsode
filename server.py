@@ -28,6 +28,8 @@ import rhapsode as p2a
 from extraction import clean_text, extract_segments
 
 MAX_UPLOAD = 100 * 1024 * 1024
+PAPERS_PER_USER = 200      # per non-admin account; the operator
+                           # pays for every paper's GPU time
 REPO = Path(__file__).resolve().parent
 
 
@@ -349,6 +351,22 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         return entry
 
     @app.middleware("http")
+    async def _security_headers(request, call_next):
+        resp = await call_next(request)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")
+        # The read-along is generated HTML carrying PDF-derived strings. Its
+        # JSON is escaped now, but a CSP is the second line of defence that
+        # was entirely absent: no remote script, no framing by anyone else.
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "media-src 'self'; frame-ancestors 'self'; base-uri 'none'; "
+            "form-action 'self'")
+        return resp
+
+    @app.middleware("http")
     async def _touch_activity(request, call_next):
         # every real request counts as activity for idle-exit — except the
         # long-lived SSE stream, whose heartbeats would keep us alive forever
@@ -511,6 +529,27 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                            "papers": counts.get(n, 0)} for n in users.names()],
                 "invites": users.open_invites()}
 
+    @app.delete("/api/invites/{key}")
+    def revoke_invite(key: str, request: Request):
+        who = caller(request)
+        if not multiuser or not who or not users.is_admin(who):
+            raise HTTPException(403, "admins only")
+        try:
+            users.revoke_invite(key)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @app.get("/admin", response_class=HTMLResponse)
+    def admin_page(request: Request):
+        who = caller(request)
+        if not multiuser or not who or not users.is_admin(who):
+            raise HTTPException(404, "not found")
+        page = REPO / "admin.html"
+        if not page.is_file():
+            return HTMLResponse("<p>admin.html missing</p>", status_code=500)
+        return HTMLResponse(page.read_text())
+
     @app.delete("/api/users/{name}")
     def remove_user(name: str, request: Request):
         who = caller(request)
@@ -632,6 +671,17 @@ def create_app(lib, worker, auth_cfg=None, users=None):
     def _ingest(filename, data, owner=None):
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "file exceeds 100 MB")
+        # MAX_UPLOAD caps one file; nothing capped how many. Every paper is
+        # GPU time on the operator's account, so an invited user gets a
+        # ceiling — generous enough to be invisible in normal use.
+        if multiuser and owner and not users.is_admin(owner):
+            with lib.lock:
+                mine = sum(1 for e in lib.data["papers"].values()
+                           if e.get("owner") == owner)
+            if mine >= PAPERS_PER_USER:
+                raise HTTPException(
+                    429, f"you have {mine} papers, the limit is "
+                         f"{PAPERS_PER_USER}. Delete one, or ask an admin.")
         if not data.startswith(b"%PDF"):
             raise HTTPException(400, f"{filename}: not a PDF")
         digest = hashlib.sha1(data).hexdigest()[:10]

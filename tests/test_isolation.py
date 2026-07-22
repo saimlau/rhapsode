@@ -655,6 +655,61 @@ def test_worker_survives_a_runtime_error():
     assert len(calls) == 2, "the second paper was never attempted"
 
 
+
+def test_an_invite_can_be_revoked_before_it_is_used():
+    """A link that cannot be withdrawn is a bearer credential with a two-week
+    life, and it travels in a URL — browser history, chat logs, access logs."""
+    app, _lib, users = _app()
+    c = TestClient(app)
+    admin = _as(c, "boss")
+    tok = c.post("/api/invites", headers=admin).json()["token"]
+    key = c.get("/api/users", headers=admin).json()["invites"][0]["key"]
+    assert c.delete(f"/api/invites/{key}", headers=admin).status_code == 200
+    assert not users.invite_ok(tok)
+    assert c.get(f"/join/{tok}").status_code == 410
+
+
+def test_only_an_admin_may_revoke_or_open_the_admin_page():
+    app, _lib, _u = _app()
+    c = TestClient(app)
+    key = c.get("/api/users", headers=_as(c, "boss")).json()
+    tok_key = c.post("/api/invites", headers=_as(c, "boss")).json()["token"]
+    assert c.get("/admin", headers=_as(c, "mallory")).status_code == 404
+    assert c.get("/admin", headers=_as(c, "boss")).status_code == 200
+    assert c.delete("/api/invites/whatever",
+                    headers=_as(c, "mallory")).status_code == 403
+
+
+def test_a_user_cannot_upload_without_limit():
+    """Every paper is GPU time on the operator's account."""
+    app, lib, _u = _app()
+    c = TestClient(app)
+    server.PAPERS_PER_USER = 3
+    try:
+        h = _as(c, "mallory")
+        codes = []
+        for i in range(5):
+            r = c.post("/api/papers", headers=h,
+                       files={"file": (f"p{i}.pdf",
+                                       b"%PDF-1.4 unique " + str(i).encode(),
+                                       "application/pdf")})
+            codes.append(r.status_code)
+        assert 429 in codes, f"no quota was enforced: {codes}"
+    finally:
+        server.PAPERS_PER_USER = 200
+
+
+def test_security_headers_are_present():
+    """The read-along is generated HTML carrying PDF-derived strings; a CSP is
+    the second line of defence that was entirely absent."""
+    app, _lib, _u = _app()
+    c = TestClient(app)
+    r = c.get("/api/library", headers=_as(c, "mallory"))
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+    csp = r.headers.get("Content-Security-Policy", "")
+    assert "default-src 'self'" in csp and "frame-ancestors 'self'" in csp
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

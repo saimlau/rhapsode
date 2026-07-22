@@ -9,10 +9,10 @@ serves the read-along; the GPU work goes to [Modal](backends.md), which
 starts a container per batch and bills only while it runs. A €4/month VPS
 with 2 vCPU and no GPU is enough.
 
-!!! note "One account, several devices"
-    This is single-tenant: one password, one shared library. Everyone who
-    logs in sees the same papers. Per-user accounts and private shelves are
-    not built yet.
+!!! note "One password by default"
+    Out of the box this is single-tenant: one password, one shared library.
+    [Named accounts with private shelves](#accounts-for-a-few-colleagues) are
+    a separate switch, off unless you turn it on.
 
 ## What you need
 
@@ -130,6 +130,23 @@ server {
 }
 ```
 
+If you enable accounts, add rate limiting for the two unauthenticated
+endpoints — each login attempt costs a deliberate scrypt hash, so an
+unthrottled flood is a cheap way to pin the CPU — and stop logging invite
+tokens:
+
+```nginx
+# in the http { } block
+limit_req_zone $binary_remote_addr zone=rhapsode_auth:1m rate=10r/m;
+
+# in the server { } block
+location = /login { limit_req zone=rhapsode_auth burst=5 nodelay;
+                    proxy_pass http://127.0.0.1:7717; }
+location /join/  { limit_req zone=rhapsode_auth burst=5 nodelay;
+                   access_log off;      # the invite token is in the URL
+                   proxy_pass http://127.0.0.1:7717; }
+```
+
 Two settings are easy to miss. Without `proxy_buffering off` the progress
 stream arrives in chunks and the queue looks frozen. Without a raised
 `client_max_body_size` a large PDF upload fails with 413 rather than a
@@ -158,6 +175,69 @@ curl -u "you:password" https://rhapsode.example.com/api/library
 
 If no `password_hash` is configured, authentication is off entirely and a
 localhost install behaves exactly as it always has.
+
+## Accounts for a few colleagues
+
+Everything above is single-tenant: one password, one shared library. Named
+accounts are a separate switch.
+
+!!! warning "Back up before you flip it"
+    The first start with `multiuser = true` rewrites `library.json` in
+    place. Copy `library.json` and `users.json` somewhere off the server
+    first — the automatic `.bak` is overwritten by the very next save.
+
+```toml
+[auth]
+password_hash = "scrypt$..."
+multiuser = true
+admin_user = "saimai"
+```
+
+On the next start the server creates `admin_user` from the password you
+already use — so the flip cannot lock you out — and marks every existing
+paper as theirs, **private**. Colleagues see nothing until you share
+something with them.
+
+### Inviting someone
+
+Visit `/admin` (admins only). "Create an invite link" produces a single-use
+URL valid for 14 days; the invitee opens it, chooses their own username and
+password, and lands in an empty shelf. You never handle their password.
+
+Anyone holding that link can create an account, so send it the way you would
+send a password — and revoke it from the same page if it goes astray. It
+travels in a URL, so it also lands in browser history and the web server's
+access log; the nginx snippet below stops logging it.
+
+### What each person can see
+
+| | their own papers | a shared paper | someone else's private paper |
+| --- | --- | --- | --- |
+| read | yes | yes | no — 404, indistinguishable from a wrong id |
+| regenerate, rename, delete | yes | no, only its owner | no |
+| share | yes | no | no |
+
+Admins see and may change everything. Sharing a paper does not hand over
+control of it.
+
+Removing an account does **not** remove its papers: they keep an owner who
+can no longer sign in, and the username is retired so it can never be
+claimed by someone else (it would otherwise inherit that shelf). Reassign
+anything you still want first.
+
+### Limits
+
+Each non-admin account is capped at 200 papers, because every paper is GPU
+time on **your** Modal account. Raise `PAPERS_PER_USER` in `server.py` if
+that is wrong for your group. There is no bandwidth or disk quota beyond
+that — invite people you would lend your laptop to.
+
+### Rolling it back
+
+Set `multiuser = false` and restart. The single password works again and
+every paper stays where it is. Existing sessions are not invalidated by the
+change, so delete `.session_secret` in the library root at the same time if
+you are rolling back because an account was compromised.
 
 ## Point Zotero at it
 

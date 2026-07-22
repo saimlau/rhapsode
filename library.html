@@ -623,11 +623,14 @@ function sortMenu(x, y) {
       : (a, b) => dir * ((val(a) ?? 0) - (val(b) ?? 0));
     const ids = [...visibleIds()].sort(cmp);
     if (activePl && playlists()[activePl]) {
-      playlists()[activePl].order = ids;
-      fetch(`/api/playlists/${activePl}`, { method: "PUT", ...jbody({ order: ids }) });
+      const pl = playlists()[activePl], before = pl.order;
+      pl.order = spliceIntoFull(before, ids);
+      sendOrder(`/api/playlists/${activePl}`, pl.order,
+                () => { pl.order = before; });
     } else {
-      state.order = ids;
-      fetch("/api/queue", { method: "PUT", ...jbody({ order: ids }) });
+      const before = state.order;
+      state.order = spliceIntoFull(before, ids);
+      sendOrder("/api/queue", state.order, () => { state.order = before; });
     }
     render();
   };
@@ -653,17 +656,49 @@ $("queue").addEventListener("dragover", e => {
   over.parentNode.insertBefore(drag,
     e.clientY < r.top + r.height / 2 ? over : over.nextSibling);
 });
+/* Reordering while the search box has text used to send ONLY the matching
+   rows as the whole order. The server rejects a partial list (400), but the
+   page had already overwritten its own model and never checked the response,
+   so every non-matching paper vanished from the UI until reload. Splice the
+   moved subset back into the full order at the positions it occupied. */
+function spliceIntoFull(fullOrder, subsetNewOrder) {
+  const inSubset = new Set(subsetNewOrder);
+  const it = subsetNewOrder[Symbol.iterator]();
+  return fullOrder.map(id => inSubset.has(id) ? it.next().value : id);
+}
+
+/* A mutating write that silently failed left the page lying about the
+   library. Check the status, say so, and resync from the server. */
+function sendOrder(url, order, revert) {
+  return fetch(url, { method: "PUT", ...jbody({ order }) })
+    .then(r => { if (!r.ok) throw new Error(r.status); })
+    .catch(() => {
+      toast("Could not save the new order");
+      revert();
+      // resync from the server: never leave the page asserting an order the
+      // server rejected
+      fetch("/api/library").then(r => r.json()).then(apply).catch(() => {});
+    });
+}
+
 $("queue").addEventListener("dragend", () => {
   document.querySelector(".row.dragging")?.classList.remove("dragging");
-  const order = [...document.querySelectorAll(".row")].map(c => c.dataset.id);
+  const shown = [...document.querySelectorAll(".row")].map(c => c.dataset.id);
   if (activePl && playlists()[activePl]) {
-    if (order.join() !== playlists()[activePl].order.join()) {
-      playlists()[activePl].order = order;
-      fetch(`/api/playlists/${activePl}`, { method: "PUT", ...jbody({ order }) });
+    const pl = playlists()[activePl], before = pl.order;
+    const order = spliceIntoFull(before, shown);
+    if (order.join() !== before.join()) {
+      pl.order = order;
+      sendOrder(`/api/playlists/${activePl}`, order,
+                () => { pl.order = before; });
     }
-  } else if (order.join() !== state.order.join()) {
-    state.order = order;
-    fetch("/api/queue", { method: "PUT", ...jbody({ order }) });
+  } else {
+    const before = state.order;
+    const order = spliceIntoFull(before, shown);
+    if (order.join() !== before.join()) {
+      state.order = order;
+      sendOrder("/api/queue", order, () => { state.order = before; });
+    }
   }
   dragId = null;
 });
