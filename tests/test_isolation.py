@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -488,6 +489,170 @@ def test_one_invite_cannot_mint_two_accounts_concurrently():
         t.join()
     assert len(made) == 1, f"a single-use invite minted {len(made)} accounts"
     assert len(errors) == 7
+
+
+
+# --------------------------------------------------------------------
+# Second review pass (2026-07-21). Three of these are regressions of the
+# FIRST pass's fixes — new code is where new bugs live.
+# --------------------------------------------------------------------
+
+def test_a_playlist_with_no_owner_is_not_everybodys():
+    """Every playlist predating accounts has owner=None. Reading that as
+    "public" handed the operator's own playlists to every invitee."""
+    app, lib, _u = _app()
+    c = TestClient(app)
+    with lib.lock:
+        lib.data["playlists"]["reading"] = {"name": "Reading", "order": []}
+        lib.save()
+    h = _as(c, "mallory")
+    assert "reading" not in c.get("/api/library", headers=h).json()["playlists"]
+    assert c.put("/api/playlists/reading", headers=h,
+                 json={"name": "pwned"}).status_code == 404
+    assert c.delete("/api/playlists/reading", headers=h).status_code == 404
+    assert lib.data["playlists"]["reading"]["name"] == "Reading"
+
+
+def test_migration_stamps_playlists_as_well_as_papers():
+    root = Path(tempfile.mkdtemp())
+    lib = server.Library(root)
+    lib.data["papers"]["old"] = {"id": "old", "status": "ready"}
+    lib.data["playlists"]["old-pl"] = {"name": "Old", "order": []}
+    lib.save()
+    server._bootstrap_users(lib, {"multiuser": True, "admin_user": "saimai",
+                                  "password_hash": auth.hash_password("pw12345678")})
+    assert lib.data["papers"]["old"]["owner"] == "saimai"
+    assert lib.data["playlists"]["old-pl"]["owner"] == "saimai", \
+        "the migration forgot playlists entirely"
+
+
+def test_a_deleted_username_cannot_be_reclaimed():
+    """Ownership is keyed on the username and invitees pick their own, so a
+    freed name was a claimable capability over a departed member's shelf."""
+    app, _lib, users = _app()
+    users.delete("mallory")
+    try:
+        users.create("mallory", "a brand new long password")
+        raise AssertionError("a retired username must not be reusable")
+    except ValueError:
+        pass
+
+
+def test_redeem_does_not_unburn_an_invite_whose_account_exists():
+    """create() inserts the user before it saves, so a failing save left a
+    live account behind a still-usable single-use invite."""
+    import os
+    root = Path(tempfile.mkdtemp())
+    users = auth.Users(root)
+    users.create("boss", "a long enough password", admin=True)
+    tok = users.mint_invite("boss")
+    real_replace, boom = os.replace, {"n": 0}
+
+    def flaky(a, b):
+        if boom["n"] == 0 and str(b).endswith("users.json"):
+            boom["n"] = 1
+            raise OSError(28, "No space left on device")
+        return real_replace(a, b)
+
+    os.replace = flaky
+    try:
+        try:
+            users.redeem(tok, "first", "a long enough password")
+        except OSError:
+            pass
+    finally:
+        os.replace = real_replace
+    if users.exists("first"):
+        assert not users.invite_ok(tok), \
+            "the account was created, so the invite must stay burnt"
+
+
+def test_corrupt_users_file_refuses_to_start():
+    """A truncated users.json read as "no accounts yet" — the bootstrap then
+    recreated the admin and orphaned every paper to a vanished username."""
+    root = Path(tempfile.mkdtemp())
+    auth.Users(root).create("saimai", "a long enough password", admin=True)
+    (root / auth.USERS_FILE).write_text('{"users": {"sai')     # truncated
+    try:
+        auth.Users(root)
+        raise AssertionError("a corrupt account table must not start empty")
+    except SystemExit:
+        pass
+
+
+def test_settings_are_not_writable_by_everyone():
+    app, _lib, _u = _app()
+    c = TestClient(app)
+    assert c.put("/api/settings", headers=_as(c, "mallory"),
+                 json={"auto_advance": False}).status_code == 403
+    assert c.put("/api/settings", headers=_as(c, "boss"),
+                 json={"auto_advance": False}).status_code == 200
+
+
+def test_reserving_placeholder_is_never_listed():
+    app, lib, _u = _app()
+    c = TestClient(app)
+    with lib.lock:
+        lib.data["papers"]["half-made"] = {"id": "half-made", "status": "reserving",
+                                           "hash": "x", "owner": "mallory"}
+        lib.save()
+    seen = c.get("/api/library", headers=_as(c, "mallory")).json()["papers"]
+    assert "half-made" not in seen
+
+
+def test_join_page_escapes_what_it_echoes():
+    app, _lib, users = _app()
+    c = TestClient(app)
+    tok = users.mint_invite("boss")
+    r = c.get(f"/join/{tok}?bad=<img src=x onerror=alert(1)>")
+    assert "<img src=x" not in r.text, "the ?bad= echo is not escaped"
+    assert "&lt;img" in r.text
+
+
+def test_worker_survives_a_runtime_error():
+    """`raise` inside a matched except clause escapes the whole try block, so
+    every RuntimeError killed the only worker thread permanently while the
+    HTTP server kept answering 200."""
+    import queue as _q
+    root = Path(tempfile.mkdtemp())
+    lib = server.Library(root)
+    w = server.Worker(lib, "af_heart", 1.0, 150)
+    for pid in ("boom", "fine"):
+        (root / pid).mkdir(parents=True, exist_ok=True)
+        (root / pid / "paper.pdf").write_bytes(b"%PDF-1.4 stub")
+        lib.data["papers"][pid] = {"id": pid, "status": "pending",
+                                   "progress": 0.0, "owner": None}
+        lib.data["order"].append(pid)
+    lib.save()
+    calls = []
+
+    def fake_generate(pdf, out, *a, **kw):
+        calls.append(pdf)
+        if "boom" in str(pdf):
+            raise RuntimeError("modal endpoint error: something went wrong")
+        return {"duration": 1.0, "warnings": [], "title": "t",
+                "authors": None, "year": None}
+
+    # the worker extracts before it generates; stub both so the only failure
+    # in play is the RuntimeError this test is about
+    real_gen = server.p2a.generate_readalong
+    real_prep = server.p2a.prepare_units
+    server.p2a.generate_readalong = fake_generate
+    server.p2a.prepare_units = lambda *a, **kw: ([], {})
+    try:
+        w.enqueue("boom")
+        w.enqueue("fine")
+        w.start()
+        for _ in range(100):
+            if lib.data["papers"]["fine"]["status"] in ("ready", "error"):
+                break
+            time.sleep(0.1)
+    finally:
+        server.p2a.generate_readalong = real_gen
+        server.p2a.prepare_units = real_prep
+    assert w.is_alive(), "the worker thread died on a RuntimeError"
+    assert lib.data["papers"]["boom"]["status"] == "error"
+    assert len(calls) == 2, "the second paper was never attempted"
 
 
 if __name__ == "__main__":

@@ -141,24 +141,39 @@ class Users:
     def load(self):
         try:
             self.data = json.loads(self.path.read_text())
-        except (OSError, ValueError):
-            pass
+        except FileNotFoundError:
+            pass                    # first run: an empty store is correct
+        except (OSError, ValueError) as e:
+            # A truncated or unreadable file used to come back as "no accounts
+            # yet", which makes the bootstrap recreate the admin from config
+            # and orphans every paper to a username that no longer exists.
+            # Refuse to start instead — the data is still on disk to recover.
+            raise SystemExit(
+                f"error: {self.path} is unreadable ({e}). Refusing to start "
+                f"with an empty account table; restore it from backup.")
         self.data.setdefault("users", {})
         self.data.setdefault("invites", {})
+        self.data.setdefault("retired", [])
         return self.data
 
     def save(self):
-        self.revision += 1
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump(self.data, f, indent=1)
-        os.replace(tmp, self.path)      # atomic; never a half-written file
-        try:
-            os.chmod(self.path, 0o600)  # it holds password hashes
-        except OSError:
-            pass
+        # Serialised, and to a per-writer temp path. Two threads sharing one
+        # fixed "users.tmp" raced: one os.replace consumed the file the other
+        # was still writing, so the loser raised and its change was lost from
+        # disk while surviving in memory.
+        with self.lock:
+            self.revision += 1
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(
+                f".{os.getpid()}.{threading.get_ident()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(self.data, f, indent=1)
+            os.replace(tmp, self.path)  # atomic; never a half-written file
+            try:
+                os.chmod(self.path, 0o600)  # it holds password hashes
+            except OSError:
+                pass
 
     # -- accounts ------------------------------------------------------
     def exists(self, name):
@@ -174,20 +189,23 @@ class Users:
         return [n for n in self.data["users"] if self.is_admin(n)]
 
     def create(self, name, password, admin=False, pw_hash=None):
-        name = normalise_username(name)
-        if not name:
-            raise ValueError("username must be 3-32 characters: letters, "
-                             "digits, dot, dash or underscore")
-        if self.exists(name):
-            raise ValueError("that username is taken")
-        if pw_hash is None:
-            if len(password or "") < 8:
-                raise ValueError("password must be at least 8 characters")
-            pw_hash = hash_password(password)
-        self.data["users"][name] = {"pw": pw_hash, "admin": bool(admin),
-                                    "created": _now()}
-        self.save()
-        return name
+        with self.lock:
+            name = normalise_username(name)
+            if not name:
+                raise ValueError("username must be 3-32 characters: letters, "
+                                 "digits, dot, dash or underscore")
+            if self.exists(name) or name in self.data.get("retired", []):
+                # a freed username is a claimable capability over the departed
+                # member's shelf, because ownership is keyed on the name
+                raise ValueError("that username is taken")
+            if pw_hash is None:
+                if len(password or "") < 8:
+                    raise ValueError("password must be at least 8 characters")
+                pw_hash = hash_password(password)
+            self.data["users"][name] = {"pw": pw_hash, "admin": bool(admin),
+                                        "created": _now()}
+            self.save()
+            return name
 
     def check(self, name, password):
         """The username the credentials authenticate, or None. Always runs a
@@ -199,28 +217,35 @@ class Users:
         return normalise_username(name) if (ok and entry) else None
 
     def set_password(self, name, password):
-        if len(password or "") < 8:
-            raise ValueError("password must be at least 8 characters")
-        self.data["users"][name]["pw"] = hash_password(password)
-        self.save()
+        with self.lock:
+            if len(password or "") < 8:
+                raise ValueError("password must be at least 8 characters")
+            self.data["users"][name]["pw"] = hash_password(password)
+            self.save()
 
     def delete(self, name):
-        if name not in self.data["users"]:
-            raise ValueError("no such user")
-        if self.is_admin(name) and len(self.admins()) == 1:
-            raise ValueError("that is the only admin; promote another first")
-        del self.data["users"][name]
-        self.save()
+        with self.lock:
+            if name not in self.data["users"]:
+                raise ValueError("no such user")
+            if self.is_admin(name) and len(self.admins()) == 1:
+                raise ValueError("that is the only admin; promote another first")
+            del self.data["users"][name]
+            # Ownership is keyed on the username, so a freed name is a
+            # claimable capability over the departed member's whole private
+            # shelf — and invitees choose their own name. Retire it.
+            self.data.setdefault("retired", []).append(name)
+            self.save()
 
-    # -- invites -------------------------------------------------------
+    # -- invites -----------------------------------------------------------
     def mint_invite(self, by, ttl=INVITE_TTL):
         """Returns the raw token — the only time it exists in clear."""
-        token = secrets.token_urlsafe(24)
-        self.data["invites"][_token_key(token)] = {
-            "created": _now(), "expires": _now() + ttl,
-            "by": by, "used_by": None}
-        self.save()
-        return token
+        with self.lock:
+            token = secrets.token_urlsafe(24)
+            self.data["invites"][_token_key(token)] = {
+                "created": _now(), "expires": _now() + ttl,
+                "by": by, "used_by": None}
+            self.save()
+            return token
 
     def invite_ok(self, token):
         inv = self.data["invites"].get(_token_key(token or ""))
@@ -244,7 +269,11 @@ class Users:
             try:
                 created = self.create(name, password)
             except Exception:
-                self.data["invites"][key]["used_by"] = None   # still usable
+                # only un-burn if the account really was NOT created: create()
+                # inserts the user before it saves, so a failing save left a
+                # live account behind a "usable" single-use invite
+                if not self.exists(normalise_username(name)):
+                    self.data["invites"][key]["used_by"] = None
                 raise
             self.data["invites"][key]["used_by"] = created
             self.data["invites"][key]["used_at"] = _now()

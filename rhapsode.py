@@ -664,12 +664,27 @@ def render_pages(pdf_path, out_dir, dpi):
     return len(doc)
 
 
+def _json_for_script(obj):
+    """JSON safe to embed inside an inline <script>.
+
+    Everything in the manifest comes from the PDF — unit text, headings, the
+    title, the whole word layer — and json.dumps does NOT escape "</script>".
+    A paper containing that string closed the tag and ran whatever followed,
+    same-origin, every time the read-along was opened. U+2028/9 are escaped
+    too: they are legal in JSON but terminate a JavaScript line.
+    """
+    return (json.dumps(obj, ensure_ascii=False)
+            .replace("</", "<\\/")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029"))
+
+
 def write_viewer(out_dir, manifest):
     template = Path(__file__).resolve().parent / "viewer.html"
     data = json.dumps(manifest, ensure_ascii=False)
     if template.is_file():
         html = template.read_text(encoding="utf-8")
-        html = html.replace("/*__PAPER_DATA__*/null", data)
+        html = html.replace("/*__PAPER_DATA__*/null", _json_for_script(manifest))
         (out_dir / "index.html").write_text(html, encoding="utf-8")
     else:
         print("warning: viewer.html template missing; wrote manifest only")

@@ -277,16 +277,27 @@ class Worker(threading.Thread):
                     fields.update(title=info["title"], authors=info["authors"],
                                   year=info["year"])
                 self.lib.update(pid, **fields)
-            except RuntimeError as e:
-                # an interpreter shutting down makes pool.submit raise; that is
-                # an artifact of exiting, not a bad paper — leave it 'generating'
-                # so crash recovery re-queues it instead of failing it forever
-                if "cannot schedule new futures" in str(e):
+            except BaseException as e:  # keep the queue alive on ANY failure
+                # ONE handler, deliberately. This used to be two: `except
+                # RuntimeError: ... raise` followed by `except Exception`. A
+                # re-raise from a matched clause is not offered to its
+                # siblings, so every RuntimeError — a Modal endpoint error, an
+                # ffmpeg failure, a CUDA OOM — escaped the loop and killed the
+                # only worker thread permanently, while the HTTP server kept
+                # answering 200 and nothing alerted.
+                if isinstance(e, RuntimeError) and \
+                        "cannot schedule new futures" in str(e):
+                    # an interpreter shutting down makes pool.submit raise;
+                    # that is an artifact of exiting, not a bad paper — leave
+                    # it 'generating' so crash recovery re-queues it
                     print("shutdown during generation; paper will resume")
                     return
-                raise
-            except Exception as e:  # keep the queue alive on any failure
-                self.lib.update(pid, status="error", error=str(e))
+                if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise                      # a real stop must still stop
+                try:
+                    self.lib.update(pid, status="error", error=str(e))
+                except Exception as inner:     # never let bookkeeping kill it
+                    print(f"could not record failure for {pid}: {inner}")
             finally:
                 self.last_activity = time.time()  # work isn't idle time —
                 # the idle-exit clock starts when the batch ENDS
@@ -312,6 +323,8 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         return getattr(request.state, "user", None) if multiuser else None
 
     def visible(entry, who):
+        if entry.get("status") == "reserving":
+            return False        # a half-created upload is nobody's paper yet
         if not multiuser or who is None:
             return True
         return entry.get("owner") == who or entry.get("shared") or \
@@ -435,6 +448,11 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             Response(status_code=303, headers={"Location": "/dashboard"}), who)
 
     # ------------------------------------------------------------- invites
+    def _esc(v):
+        return (str(v).replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace('"', "&quot;")
+                .replace("'", "&#39;"))
+
     @app.get("/join/{token}", response_class=HTMLResponse)
     def join_page(token: str, bad: str = ""):
         page = REPO / "join.html"
@@ -447,9 +465,11 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                                          "invalid, already used, or expired.")
                                 .replace("{{formhidden}}", "hidden"),
                                 status_code=410)
+        # `bad` is echoed from the query string, and `token` from the path:
+        # both are attacker-controlled and land in HTML, so escape them
         return HTMLResponse(page.read_text()
-                            .replace("{{token}}", token)
-                            .replace("{{error}}", bad)
+                            .replace("{{token}}", _esc(token))
+                            .replace("{{error}}", _esc(bad))
                             .replace("{{formhidden}}", ""))
 
     @app.post("/join/{token}")
@@ -602,7 +622,7 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             plid: {**pl, "order": [pid for pid in pl["order"]
                                    if pid in snap["papers"]]}
             for plid, pl in snap.get("playlists", {}).items()
-            if pl.get("owner") in (None, who) or users.is_admin(who)}
+            if pl.get("owner") == who or users.is_admin(who)}
         return snap
 
     @app.get("/api/library")
@@ -741,8 +761,10 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             if not pl:
                 raise HTTPException(404, "unknown playlist")
             if multiuser and who is not None:
-                owner = pl.get("owner")
-                if owner is not None and owner != who and not users.is_admin(who):
+                # An ownerless playlist is NOT everybody's. Every playlist that
+                # predates accounts has owner=None, so treating None as public
+                # handed the operator's own playlists to every invitee.
+                if pl.get("owner") != who and not users.is_admin(who):
                     raise HTTPException(404, "unknown playlist")
             return pl
 
@@ -856,9 +878,11 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                 if not visible(p, who):   # counting everyone's papers told a
                     continue              # user how many others had uploaded
                 counts[p["status"]] = counts.get(p["status"], 0) + 1
-        return {"kokoro": p2a.pipeline_status(),
-                "grobid": grobid.status(),
-                "papers": counts, "queue": worker.q.qsize()}
+        out = {"kokoro": p2a.pipeline_status(), "grobid": grobid.status(),
+               "papers": counts}
+        if not multiuser or who is None or users.is_admin(who):
+            out["queue"] = worker.q.qsize()   # global depth: admins only
+        return out
 
     @app.put("/api/queue")
     def reorder(request: Request, body: dict):
@@ -885,7 +909,15 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         return {"ok": True}
 
     @app.put("/api/settings")
-    def settings(body: dict):
+    def settings(request: Request, body: dict = None):
+        who = caller(request)
+        if multiuser and who is not None and not users.is_admin(who):
+            # one object shared by everyone: a colleague toggling auto-advance
+            # would change it for the whole lab
+            raise HTTPException(403, "settings are shared; ask an admin")
+        return _settings(body or {})
+
+    def _settings(body: dict):
         with lib.lock:
             lib.data["settings"].update(
                 {k: v for k, v in body.items() if k in ("auto_advance",)})
@@ -1019,6 +1051,10 @@ def _bootstrap_users(lib, auth_cfg):
             if entry.get("owner") is None:
                 entry["owner"] = owner       # papers predating accounts
                 entry.setdefault("shared", False)
+                changed += 1
+        for pl in lib.data.get("playlists", {}).values():
+            if pl.get("owner") is None:      # ...and playlists, which the
+                pl["owner"] = owner          # first version forgot entirely
                 changed += 1
         if changed:
             lib.save()
