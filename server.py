@@ -397,6 +397,33 @@ def create_app(lib, worker, auth_cfg=None, users=None):
     _basic_ok = {}
     _auth_state_lock = threading.Lock()   # _basic_ok, _attempts, _streams are
                                           # now touched from threadpool workers
+    _basic_inflight = {}                  # header-hash -> Future; the event
+                                          # loop is single-threaded, so this
+                                          # map needs no lock
+
+    async def _verify_basic(header, key):
+        # Coalesce concurrent verifications of the SAME header onto one scrypt.
+        # A burst of a correct credential (or a flood of one wrong credential)
+        # then costs a single hash and a single throttle count, not N — which
+        # both stops a legit machine client's parallel burst from false-429ing
+        # itself on a cold cache, and keeps a same-credential flood from
+        # pinning the CPU.
+        existing = _basic_inflight.get(key)
+        if existing is not None:
+            return await existing
+        fut = asyncio.get_event_loop().create_future()
+        _basic_inflight[key] = fut
+        try:
+            result = await run_in_threadpool(_basic_valid, header)
+            if not fut.done():
+                fut.set_result(result)
+            return result
+        except BaseException as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise
+        finally:
+            _basic_inflight.pop(key, None)
 
     # A per-caller sliding-window throttle. nginx limit_req is the better place
     # (docs/hosting.md), but the app must not depend on the proxy being
@@ -496,22 +523,23 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         # verifying inline froze the whole event loop for every other client
         # for the duration — from an UNAUTHENTICATED request path.
         header = request.headers.get("authorization", "")
+        basic = None
         if header.startswith("Basic "):
             # A never-seen credential is a cache miss and a full scrypt hash,
             # so the flood the /login throttle stops just moves here unless the
-            # Basic path is throttled too. A verified header (cache hit) is
-            # cheap and must not be throttled, so only unknown headers count.
+            # Basic path is throttled too. Count a request only when it will
+            # START a new scrypt: a currently-valid cache hit is free, and a
+            # request coalescing onto an already-running verification of the
+            # same header adds no new hash for the throttle to bound.
             import hashlib as _h
-            hit = _basic_ok.get(_h.sha256(header.encode()).hexdigest())
-            # a currently-valid cache hit is cheap and must not be throttled;
-            # anything else (unknown OR stale-cached) will cost a scrypt, so
-            # gating on mere key-presence let a revoked-but-cached header skip
-            # the throttle and flood scrypt on every request
+            key = _h.sha256(header.encode()).hexdigest()
+            hit = _basic_ok.get(key)
             cheap = hit is not None and hit[1] == _users_rev()
-            if not cheap and _throttled(f"basic:{_client_ip(request)}", limit=20):
+            if (not cheap and key not in _basic_inflight
+                    and _throttled(f"basic:{_client_ip(request)}", limit=20)):
                 return JSONResponse({"detail": "too many attempts"},
                                     status_code=429)
-        basic = await run_in_threadpool(_basic_valid, header)
+            basic = await _verify_basic(header, key)
         if basic:
             request.state.user = basic if isinstance(basic, str) else None
             return await call_next(request)
@@ -694,16 +722,19 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                        "stage": p.get("stage"), "progress": p.get("progress")}
                       for pid, p in papers.items()
                       if p.get("status") == "generating"]
+        def card(pid, p):
+            return {"id": pid, "title": p.get("title"),
+                    "authors": p.get("authors"), "year": p.get("year"),
+                    "at": p.get("resume_t"), "duration": p.get("duration")}
         resume = sorted(
-            ({"id": pid, "title": p.get("title"), "at": p.get("resume_t"),
-              "duration": p.get("duration")}
-             for pid, p in papers.items()
+            (card(pid, p) for pid, p in papers.items()
              if p.get("status") == "ready" and (p.get("resume_t") or 0) > 30),
             key=lambda r: -(r["at"] or 0))[:5]
-        recent = [{"id": pid, "title": p.get("title")}
-                  for pid, p in sorted(papers.items(),
-                                       key=lambda kv: -(kv[1].get("added") or 0))
-                  if p.get("status") == "ready"][:5]
+        # the whole shelf, newest first, for the cover wall
+        shelf = [card(pid, p) for pid, p in sorted(
+            papers.items(), key=lambda kv: -(kv[1].get("added") or 0))
+            if p.get("status") == "ready"]
+        recent = [{"id": r["id"], "title": r["title"]} for r in shelf[:5]]
         failed = [{"id": pid, "title": p.get("title"), "error": p.get("error")}
                   for pid, p in papers.items() if p.get("status") == "error"]
         try:
@@ -717,7 +748,8 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             "stats": {"papers": len(papers), "hours": round(hours / 3600, 1),
                       "by_status": by_status},
             "generating": generating, "queued": by_status.get("pending", 0),
-            "resume": resume, "recent": recent, "failed": failed,
+            "resume": resume, "shelf": shelf, "recent": recent,
+            "failed": failed,
             # deliberately NOT pinged: a health check would wake a GPU
             # container and bill for it. Report what is configured.
             "machinery": {
@@ -1183,6 +1215,30 @@ def create_app(lib, worker, auth_cfg=None, users=None):
     @app.get("/tts")
     def tts_get(text: str, rate: float = 1.0, voice: str = None):
         return _tts(text, rate, voice)
+
+    @app.get("/api/papers/{pid}/preview")
+    def paper_preview(pid: str, request: Request):
+        """The opening sentence(s), so the dashboard can remind you what a
+        paper IS before you press play. Reads the already-generated manifest;
+        no PDF work, no GPU."""
+        entry = see(pid, request)
+        mf = lib.view_dir(pid) / "manifest.json"
+        try:
+            units = json.loads(mf.read_text()).get("units") or []
+        except (OSError, ValueError):
+            return {"text": ""}
+        title = " ".join((entry.get("title") or "").lower().split())
+        out = []
+        for u in units:
+            t = (u.get("text") or "").strip()
+            norm = " ".join(t.lower().split())
+            # skip the title unit (units[0] is the title) and bare headings
+            if len(t) <= 12 or (title and (norm in title or title in norm)):
+                continue
+            out.append(t)
+            if sum(len(x) for x in out) > 320:
+                break
+        return {"text": " ".join(out)[:360]}
 
     @app.get("/view/{pid}/{path:path}")
     def view(pid: str, request: Request, path: str = ""):

@@ -884,6 +884,44 @@ def test_non_finite_year_does_not_500():
         assert r.status_code < 500, f"year {y} -> {r.status_code}"
 
 
+
+def test_concurrent_correct_credential_is_not_false_throttled():
+    """A machine client firing its OWN correct credential as a parallel burst
+    on a cold cache must not 429 itself: concurrent verifications of one header
+    coalesce to a single scrypt and a single throttle count. Distinct wrong
+    credentials still each count."""
+    try:
+        import httpx
+    except ImportError:
+        print("  (skipped: httpx not installed)")
+        return
+    import asyncio
+    root = Path(tempfile.mkdtemp())
+    lib = server.Library(root)
+    users = auth.Users(root)
+    users.create("zotero", "hunter2secret", admin=True)
+    w = server.Worker(lib, "af_heart", 1.0, 150)
+    app = server.create_app(lib, w, {"password_hash": auth.hash_password("x"),
+                                     "multiuser": True}, users)
+
+    async def burst(header_fn, n):
+        tr = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=tr, base_url="http://t") as c:
+            rs = await asyncio.gather(*[
+                c.get("/api/library", headers={"Authorization": header_fn(i)})
+                for i in range(n)])
+        return [r.status_code for r in rs]
+
+    good = "Basic " + base64.b64encode(b"zotero:hunter2secret").decode()
+    correct = asyncio.run(burst(lambda i: good, 30))
+    assert 429 not in correct, f"a correct-credential burst false-429'd: {correct}"
+    assert correct.count(200) == 30
+
+    wrong = asyncio.run(burst(
+        lambda i: "Basic " + base64.b64encode(f"z:wrong{i}".encode()).decode(), 40))
+    assert 429 in wrong, "a distinct-wrong-credential flood must still throttle"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
