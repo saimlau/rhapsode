@@ -6,119 +6,151 @@
 :root {
   --desk: #ECEAE6; --side: #E6E3DC; --ink: #2A2721; --muted: #8A857A;
   --hairline: rgba(40, 33, 20, .14);
-  --marker: #F5B301; --marker-wash: rgba(245, 179, 1, .14);
+  --marker: #F5B301; --marker-wash: rgba(245, 179, 1, .16);
   --error: #A33F35;
   --serif: "New York", "Iowan Old Style", Georgia, serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --page-shadow: 0 1px 2px rgba(40,33,20,.14), 0 6px 18px rgba(40,33,20,.10);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --desk: #1B1A18; --side: #22211E; --ink: #E6E2D8; --muted: #8E8A80;
-    --hairline: rgba(255, 250, 235, .13); --marker-wash: rgba(245, 179, 1, .10);
+    --hairline: rgba(255, 250, 235, .13); --marker-wash: rgba(245, 179, 1, .13);
     --error: #E09287;
+    --page-shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
   }
 }
+:root[data-theme="dark"] {
+  --desk: #1B1A18; --side: #22211E; --ink: #E6E2D8; --muted: #8E8A80;
+  --hairline: rgba(255, 250, 235, .13); --marker-wash: rgba(245, 179, 1, .13);
+  --error: #E09287; --page-shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"] {
+  --desk: #ECEAE6; --side: #E6E3DC; --ink: #2A2721; --muted: #8A857A;
+  --hairline: rgba(40, 33, 20, .14); --marker-wash: rgba(245, 179, 1, .16);
+  --error: #A33F35; --page-shadow: 0 1px 2px rgba(40,33,20,.14), 0 6px 18px rgba(40,33,20,.10);
+}
 * { box-sizing: border-box; scrollbar-width: thin; }
-body {
-  margin: 0; background: var(--desk); color: var(--ink);
-  font-family: var(--sans); line-height: 1.5;
-}
-a { color: inherit; }
+body { margin: 0; background: var(--desk); color: var(--ink);
+       font-family: var(--sans); line-height: 1.5; }
+a { color: inherit; text-decoration: none; }
 
-.bar {
-  display: flex; align-items: baseline; gap: 1.2rem;
-  padding: .85rem clamp(1rem, 4vw, 2.5rem);
-}
+.bar { display: flex; align-items: baseline; gap: 1.2rem;
+       padding: .85rem clamp(1rem, 4vw, 2.5rem); }
 .bar .mark { font-family: var(--serif); font-size: 1.1rem; }
 .bar nav { margin-left: auto; display: flex; gap: 1.2rem; align-items: baseline; }
-.bar a, .bar button {
-  font: 500 .8rem var(--sans); color: var(--muted); text-decoration: none;
-  background: none; border: 0; padding: 0; cursor: pointer;
-}
+.bar a, .bar button { font: 500 .8rem var(--sans); color: var(--muted);
+  background: none; border: 0; padding: 0; cursor: pointer; }
 .bar a:hover, .bar button:hover { color: var(--ink); }
-.bar .here { color: var(--ink);
-  box-shadow: inset 0 -6px 0 var(--marker-wash); }
+.bar .here { color: var(--ink); box-shadow: inset 0 -6px 0 var(--marker-wash); }
 
-main {
-  max-width: 62rem; margin: 0 auto;
-  padding: clamp(.6rem, 3vw, 2rem) clamp(1rem, 4vw, 2.5rem) 3rem;
-}
+main { max-width: 68rem; margin: 0 auto;
+       padding: clamp(.4rem, 2vw, 1.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 
-.lede {
-  font-family: var(--serif); font-size: clamp(1.45rem, 3.6vw, 2.1rem);
-  line-height: 1.3; margin: .6rem 0 .3rem; font-weight: 500;
-  letter-spacing: -.01em; max-width: 34ch;
-}
-.lede b { font-weight: 500; box-shadow: inset 0 -.36em 0 var(--marker-wash); }
-.sub { color: var(--muted); font-size: .84rem; margin: 0 0 1.8rem; }
+/* eyebrow: mono, the app's data voice */
+.eyebrow { font: 600 .66rem var(--mono); letter-spacing: .16em;
+  text-transform: uppercase; color: var(--muted); margin: 0 0 .8rem; }
 
-.grid { display: grid; gap: 1rem; grid-template-columns: 1fr; }
-/* fr tracks size as minmax(auto, fr): one nowrap row would otherwise blow the
-   track out past main's edge instead of ellipsizing */
-.grid > *, .card, .rows li { min-width: 0; }
-@media (min-width: 860px) {
-  .grid { grid-template-columns: 1.55fr 1fr; align-items: start; }
-  .col { display: grid; gap: 1rem; }
-}
-@media (max-width: 859.9px) { .col { display: contents; } }
-
-/* content lives on cards, the same surface as the library's sidebar */
-.card {
+/* ---------------------------------------------- A: the "pick up" hero */
+.hero {
+  display: grid; grid-template-columns: minmax(120px, 168px) 1fr; gap: clamp(1rem, 4vw, 2.2rem);
   background: var(--side); border: 1px solid var(--hairline);
-  border-radius: 12px; padding: 1rem 1.15rem 1.1rem;
+  border-left: 3px solid var(--marker); border-radius: 14px;
+  padding: clamp(1.1rem, 3vw, 1.8rem); align-items: center; margin-bottom: 2.6rem;
 }
-.card h2 {
-  margin: 0 0 .7rem; font: 600 .68rem var(--sans);
-  letter-spacing: .13em; text-transform: uppercase; color: var(--muted);
+.hero .cover { position: relative; }
+.hero .cover img {
+  width: 100%; aspect-ratio: 1 / 1.29; object-fit: cover; object-position: top;
+  border: 1px solid var(--hairline); border-radius: 3px; background: #fff;
+  box-shadow: var(--page-shadow); display: block;
 }
+.hero .cover .under { position: absolute; left: 0; bottom: -1px; height: 3px;
+  background: var(--marker); border-radius: 2px; }
 
-/* SIGNATURE: the generating paper's title fills with the same amber wash the
-   reader uses to track a spoken sentence */
-.card.making { border-left: 3px solid var(--marker); }
-.making .t {
-  font-family: var(--serif); font-size: 1.1rem; line-height: 1.5;
-  display: inline; background-image: linear-gradient(var(--marker-wash), var(--marker-wash)),
-    linear-gradient(var(--marker), var(--marker));
-  background-repeat: no-repeat, no-repeat;
-  background-size: 100% 100%, var(--fill, 0%) .22em;
-  background-position: 0 0, 0 100%;
-  transition: background-size .6s ease; border-radius: 2px;
-  padding: .05em .15em;
-}
-@media (prefers-reduced-motion: reduce) { .making .t { transition: none; } }
-.making .meta {
-  font: .74rem var(--mono); color: var(--muted); margin-top: .6rem;
-  display: flex; gap: 1rem; flex-wrap: wrap;
-}
-.making .meta .pct { color: var(--marker); }
+.hero .body { min-width: 0; }
+.hero h1 {
+  margin: .35rem 0 .4rem; font: 500 clamp(1.4rem, 3.4vw, 2.15rem)/1.22 var(--serif);
+  letter-spacing: -.01em; }
+.hero .cite { font: .8rem var(--mono); color: var(--muted); margin: 0 0 .9rem; }
+.hero .peek { font: italic 1.02rem/1.55 var(--serif); color: var(--muted);
+  margin: 0 0 1.1rem; max-width: 52ch;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; }
+/* SIGNATURE: a listening-progress line drawn as the reader's amber highlighter
+   sweep — a wash track, a solid played fill, and a playhead notch at your spot */
+.hero .track { position: relative; height: 8px; max-width: 40ch;
+  background: var(--marker-wash); border-radius: 4px; margin: 0 0 1.1rem; }
+.hero .track i { display: block; height: 100%; width: var(--fill, 0%);
+  background: var(--marker); border-radius: 4px;
+  transition: width 1s cubic-bezier(.22,.61,.36,1); }
+.hero .track .head { position: absolute; top: -3px; left: var(--fill, 0%);
+  width: 2px; height: 14px; background: var(--ink); transform: translateX(-1px);
+  transition: left 1s cubic-bezier(.22,.61,.36,1); }
+@media (prefers-reduced-motion: reduce) {
+  .hero .track i, .hero .track .head { transition: none; } }
+.hero .meta { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.play {
+  display: inline-flex; align-items: center; gap: .5rem;
+  font: 600 .9rem var(--sans); color: var(--desk); background: var(--ink);
+  border: 0; border-radius: 999px; padding: .6rem 1.2rem; cursor: pointer; }
+.play:hover { background: #3b3730; }
+@media (prefers-color-scheme: dark) { .play:hover { background: #d8d3c6; } }
+.play .tri { font-size: .8em; }
+.hero .left { font: .78rem var(--mono); color: var(--muted); }
+.hero .left b { color: var(--marker); font-weight: 600; }
 
-.rows { list-style: none; margin: 0; padding: 0; }
-.rows li { display: flex; gap: .8rem; align-items: center; padding: .5rem 0; }
-/* first-page thumbnail: the file-explorer glance at what the paper IS */
-.rows img.pg {
-  width: 34px; height: 46px; object-fit: cover; object-position: top;
-  border: 1px solid var(--hairline); border-radius: 3px; flex: none;
-  background: var(--desk);
-}
-.rows li + li { border-top: 1px solid var(--hairline); }
-.rows a {
-  text-decoration: none; flex: 1; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: var(--serif); font-size: .95rem;
-}
-.rows a::before { content: "▸ "; color: var(--marker); font-size: .8em; }
-.rows a:hover { box-shadow: inset 0 -.65em 0 var(--marker-wash); }
-.rows .n { font: .72rem var(--mono); color: var(--muted); white-space: nowrap; }
-.rows .n.err { color: var(--error); overflow: hidden; text-overflow: ellipsis;
-               max-width: 12rem; }
+/* ---------------------------------------------- B: the cover wall */
+.shelf-head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 1rem; margin-bottom: .9rem; }
+.shelf-head .count { font: .72rem var(--mono); color: var(--muted); }
+.wall { display: grid; gap: clamp(.9rem, 2.4vw, 1.4rem);
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
+.tile { position: relative; display: block; }
+.tile .frame { position: relative; overflow: hidden; border-radius: 3px;
+  box-shadow: var(--page-shadow); background: #fff;
+  transition: transform .18s ease, box-shadow .18s ease; }
+.tile:hover .frame, .tile:focus-visible .frame {
+  transform: translateY(-3px); box-shadow: 0 3px 6px rgba(40,33,20,.16), 0 14px 30px rgba(40,33,20,.16); }
+.tile img { width: 100%; aspect-ratio: 1 / 1.29; object-fit: cover;
+  object-position: top; display: block; border: 1px solid var(--hairline);
+  border-radius: 3px; }
+/* progress underline — the same amber, stronger for in-progress papers */
+.tile .prog { position: absolute; left: 0; bottom: 0; height: 3px;
+  background: var(--marker); }
+/* D: the opening line, revealed on hover over the cover */
+.tile .peek {
+  position: absolute; inset: 0; padding: .7rem; border-radius: 3px;
+  background: linear-gradient(rgba(24,23,21,.04), rgba(24,23,21,.86) 55%);
+  color: #F3EFE6; font: italic .82rem/1.45 var(--serif);
+  display: flex; align-items: flex-end; opacity: 0; transition: opacity .18s ease;
+  overflow: hidden; }
+.tile:hover .peek, .tile:focus-visible .peek { opacity: 1; }
+@media (hover: none) { .tile .peek { display: none; } }
+.tile .cap { margin-top: .5rem; }
+.tile .cap .t { font: .82rem/1.28 var(--serif); color: var(--ink);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tile .cap .c { margin-top: .15rem; font: .68rem var(--mono); color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .cap .c .n { color: var(--marker); }
 
-.kv { list-style: none; margin: 0; padding: 0; font-size: .84rem; }
-.kv li { display: flex; gap: .8rem; padding: .3rem 0; align-items: baseline; }
-.kv .k { color: var(--muted); width: 6.2rem; flex: none; font-size: .78rem; }
-.empty { color: var(--muted); font-size: .86rem; margin: 0; }
-.empty a { color: inherit; }
-:focus-visible { outline: 2px solid var(--marker); outline-offset: 2px; }
+/* footer strip: the machinery + anything failed, deliberately quiet */
+.strip { display: flex; flex-wrap: wrap; gap: 1.4rem 2.4rem; margin-top: 2.8rem;
+  padding-top: 1.2rem; border-top: 1px solid var(--hairline);
+  font: .76rem var(--mono); color: var(--muted); }
+.strip .k { color: var(--ink); }
+.strip .bad a { color: var(--error); }
+.lede { font-family: var(--serif); font-size: clamp(1.5rem, 3.6vw, 2rem);
+  font-weight: 500; margin: .4rem 0 1.8rem; letter-spacing: -.01em; max-width: 30ch; }
+.lede b { font-weight: 500; box-shadow: inset 0 -.34em 0 var(--marker-wash); }
+.empty { color: var(--muted); font-size: .9rem; }
+.empty a { color: inherit; box-shadow: inset 0 -.4em 0 var(--marker-wash); }
+
+@media (max-width: 560px) {
+  .hero { grid-template-columns: 84px 1fr; gap: 1rem; }
+  .hero .peek { display: none; }
+}
+:focus-visible { outline: 2px solid var(--marker); outline-offset: 3px; }
 </style>
 
 <div class="bar">
@@ -126,6 +158,7 @@ main {
   <nav>
     <a class="here" href="/dashboard">Home</a>
     <a href="/">Library</a>
+    <a id="peopleLink" href="/admin" hidden>People</a>
     <form method="post" action="/logout" style="display:inline">
       <button type="submit">Sign out</button>
     </form>
@@ -133,106 +166,151 @@ main {
 </div>
 
 <main>
-  <p class="lede" id="lede">Reading the shelf…</p>
-  <p class="sub" id="sub"></p>
+  <div id="top"><p class="lede">Reading the shelf…</p></div>
 
-  <div class="grid">
-    <div class="col">
-      <section class="card making" id="makingCard">
-        <h2>Making now</h2>
-        <div id="making"><p class="empty">Nothing in the queue. Drop a PDF in
-          the <a href="/">library</a> to start one.</p></div>
-      </section>
-
-      <section class="card">
-        <h2>Pick up where you left off</h2>
-        <ul class="rows" id="resume"><li class="empty">Nothing started yet.</li></ul>
-      </section>
-
-      <section class="card">
-        <h2>Recently finished</h2>
-        <ul class="rows" id="recent"><li class="empty">Nothing yet.</li></ul>
-      </section>
+  <section id="shelfSection" hidden>
+    <div class="shelf-head">
+      <p class="eyebrow" style="margin:0">The shelf</p>
+      <span class="count" id="shelfCount"></span>
     </div>
+    <div class="wall" id="wall"></div>
+  </section>
 
-    <div class="col">
-      <section class="card" id="failedCard" hidden>
-        <h2>Needs attention</h2>
-        <ul class="rows" id="failed"></ul>
-      </section>
-
-      <section class="card">
-        <h2>The machinery</h2>
-        <ul class="kv" id="machinery"></ul>
-      </section>
-    </div>
-  </div>
+  <div class="strip" id="strip"></div>
 </main>
 
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const clock = s => {
+const view = id => `/view/${encodeURIComponent(id)}/index.html`;
+const cover = id => `/view/${encodeURIComponent(id)}/page-000.png`;
+
+function clock(s) {
   s = Math.max(0, Math.round(s || 0));
   const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
   return h ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
-};
+}
+function cite(p) {
+  const names = (p.authors || "").split(",").map(x => x.trim()).filter(Boolean);
+  const last = n => n.split(" ").pop();
+  let c = names.length === 0 ? "" : names.length === 1 ? last(names[0])
+        : names.length === 2 ? `${last(names[0])} & ${last(names[1])}`
+        : `${last(names[0])} et al.`;
+  if (p.year) c = c ? `${c} · ${p.year}` : String(p.year);
+  return c;
+}
+const frac = p => p.duration ? Math.min(1, (p.at || 0) / p.duration) : 0;
+
+/* the opening line, fetched once per paper and cached, for the hover peek */
+const peeks = {};
+async function peek(id, el) {
+  if (peeks[id] !== undefined) { el.textContent = peeks[id]; return; }
+  try {
+    const r = await fetch(`/api/papers/${encodeURIComponent(id)}/preview`);
+    peeks[id] = (await r.json()).text || "";
+  } catch { peeks[id] = ""; }
+  el.textContent = peeks[id];
+}
+
+function hero(p) {
+  const pct = Math.round(frac(p) * 100);
+  const left = Math.max(0, (p.duration || 0) - (p.at || 0));
+  const top = $("#top");
+  top.innerHTML = `
+    <p class="eyebrow">Pick up where you left off</p>
+    <div class="hero">
+      <a class="cover" href="${view(p.id)}" aria-label="Resume ${esc(p.title)}">
+        <img src="${cover(p.id)}" alt="" onerror="this.style.visibility='hidden'">
+        <span class="under" style="width:${pct}%"></span>
+      </a>
+      <div class="body">
+        <h1>${esc(p.title)}</h1>
+        <p class="cite">${esc(cite(p))}</p>
+        <p class="peek" id="heroPeek"></p>
+        <div class="track" style="--fill:0%"><i></i><span class="head"></span></div>
+        <div class="meta">
+          <a class="play" href="${view(p.id)}"><span class="tri">▶</span> Resume</a>
+          <span class="left"><b>${clock(left)}</b> left · ${pct}%</span>
+        </div>
+      </div>
+    </div>`;
+  peek(p.id, $("#heroPeek"));
+}
+
+function startFresh(d) {
+  const first = d.shelf[0];
+  $("#top").innerHTML = first
+    ? `<p class="lede"><b>${d.stats.papers}</b> papers, <b>${d.stats.hours}</b> hours.
+         Nothing started yet — <a href="${view(first.id)}">open the newest</a>.</p>`
+    : `<p class="lede">The shelf is empty. <a href="/">Drop a PDF</a> to begin.</p>`;
+}
+
+function wall(shelf) {
+  $("#shelfCount").textContent =
+    `${shelf.length} paper${shelf.length === 1 ? "" : "s"}`;
+  $("#wall").innerHTML = shelf.map(p => {
+    const pct = Math.round(frac(p) * 100);
+    return `<a class="tile" href="${view(p.id)}" data-id="${esc(p.id)}">
+      <div class="frame">
+        <img src="${cover(p.id)}" alt="" loading="lazy"
+             onerror="this.style.visibility='hidden'">
+        ${pct ? `<span class="prog" style="width:${pct}%"></span>` : ""}
+        <div class="peek"><span></span></div>
+      </div>
+      <div class="cap">
+        <div class="t">${esc(p.title)}</div>
+        <div class="c">${pct ? `<span class="n">${pct}%</span> · ` : ""}${esc(cite(p) || clock(p.duration))}</div>
+      </div>
+    </a>`;
+  }).join("");
+  // lazy opening-line peek on first hover of each tile
+  $("#wall").querySelectorAll(".tile").forEach(t => {
+    const load = () => peek(t.dataset.id, t.querySelector(".peek span"));
+    t.addEventListener("pointerenter", load, { once: true });
+    t.addEventListener("focus", load, { once: true });
+  });
+}
+
+function strip(d) {
+  const m = d.machinery, bad = d.failed || [];
+  const bits = [
+    `<span><span class="k">voice</span> ${esc(m.voice)}</span>`,
+    `<span><span class="k">extraction</span> ${esc(m.extraction)}</span>`,
+    m.free_gb != null ? `<span><span class="k">disk</span> ${m.free_gb} GB free</span>` : "",
+    d.queued ? `<span><span class="k">queue</span> ${d.queued} waiting</span>` : "",
+    bad.length ? `<span class="bad"><span class="k" style="color:var(--error)">needs attention</span>
+      <a href="/">${esc(bad[0].title)}${bad.length > 1 ? ` +${bad.length - 1}` : ""}</a></span>` : "",
+  ];
+  $("#strip").innerHTML = bits.filter(Boolean).join("");
+}
 
 function render(d) {
-  const st = d.stats;
-  $("#lede").innerHTML = st.papers
-    ? `<b>${st.papers}</b> papers on the shelf, <b>${st.hours}</b> hours of narration.`
-    : "The shelf is empty.";
-  const bits = [];
-  if (st.by_status.ready) bits.push(`${st.by_status.ready} ready`);
-  if (d.queued) bits.push(`${d.queued} queued`);
-  if (st.by_status.error) bits.push(`${st.by_status.error} failed`);
-  $("#sub").textContent = bits.join(" · ");
-
-  const g = d.generating[0];
-  $("#making").innerHTML = g
-    ? `<div class="t" style="--fill:${Math.round((g.progress || 0) * 100)}%">${esc(g.title)}</div>
-       <div class="meta"><span>${esc(g.stage || "starting")}</span>
-         <span class="pct">${Math.round((g.progress || 0) * 100)}%</span>
-         ${d.queued ? `<span>${d.queued} waiting</span>` : ""}</div>`
-    : `<p class="empty">Nothing generating.${d.queued ? ` ${d.queued} queued.` : ""}</p>`;
-
-  const thumb = id => `<img class="pg" loading="lazy" alt=""
-      src="/view/${encodeURIComponent(id)}/page-000.png"
-      onerror="this.remove()">`;
-  $("#resume").innerHTML = d.resume.length ? d.resume.map(r =>
-    `<li>${thumb(r.id)}<a href="/view/${encodeURIComponent(r.id)}/index.html">${esc(r.title)}</a>
-       <span class="n">${clock(r.at)} / ${clock(r.duration)}</span></li>`).join("")
-    : `<li class="empty">Nothing started yet.</li>`;
-
-  $("#recent").innerHTML = d.recent.length ? d.recent.map(r =>
-    `<li>${thumb(r.id)}<a href="/view/${encodeURIComponent(r.id)}/index.html">${esc(r.title)}</a></li>`
-  ).join("") : `<li class="empty">Nothing yet.</li>`;
-
-  const bad = d.failed.length;
-  $("#failedCard").hidden = !bad;
-  if (bad) $("#failed").innerHTML = d.failed.map(f =>
-    `<li><a href="/">${esc(f.title)}</a><span class="n err" title="${esc(f.error)}">${esc(f.error)}</span></li>`
-  ).join("");
-
-  const m = d.machinery;
-  $("#machinery").innerHTML = `
-    <li><span class="k">voice</span><span>${esc(m.voice)}</span></li>
-    <li><span class="k">extraction</span><span>${esc(m.extraction)}</span></li>
-    <li><span class="k">disk free</span><span>${m.free_gb ?? "?"} GB</span></li>`;
+  if (d.me && d.me.admin) $("#peopleLink").hidden = false;
+  if (d.resume && d.resume.length) hero(d.resume[0]); else startFresh(d);
+  $("#shelfSection").hidden = !(d.shelf && d.shelf.length);
+  if (d.shelf && d.shelf.length) wall(d.shelf);
+  strip(d);
+  // sweep the progress line to position after paint
+  const g = d.resume && d.resume[0];
+  if (g) requestAnimationFrame(() => {
+    const t = $(".hero .track"); if (t) {
+      const p = g.duration ? Math.min(100, Math.round((g.at||0)/g.duration*100)) : 0;
+      t.style.setProperty("--fill", p + "%");
+    }
+  });
 }
 
-async function tick() {
+async function load() {
   try {
-    const r = await fetch("/api/dashboard");
-    if (r.status === 401) { location.href = "/login"; return; }
-    render(await r.json());
-  } catch (e) { /* transient: the next tick retries */ }
+    const [dash, me] = await Promise.all([
+      fetch("/api/dashboard").then(r => r.status === 401 ? Promise.reject("401") : r.json()),
+      fetch("/api/me").then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    render({ ...dash, me });
+  } catch (e) {
+    if (e === "401") location.href = "/login";
+  }
 }
-tick();
-// poll only while the tab is visible: a background tab must not keep the
-// server's idle-exit clock alive forever
-setInterval(() => { if (!document.hidden) tick(); }, 4000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+load();
 </script>
