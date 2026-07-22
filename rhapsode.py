@@ -211,18 +211,22 @@ def get_pipeline():
                       else "mps" if mps else "cpu")
             if device == "cpu":
                 print("warning: no GPU available, synthesizing on CPU (slower)")
+            # repo_id arrived in a later kokoro than some interpreters can
+            # install (pip resolves an older wheel on Python 3.9), and those
+            # versions load the same model by default — so pass it only when
+            # the installed signature accepts it.
+            import inspect
+            kw = {"lang_code": "a"}
+            if "repo_id" in inspect.signature(KPipeline.__init__).parameters:
+                kw["repo_id"] = "hexgrad/Kokoro-82M"
             try:
-                _PIPELINE = KPipeline(lang_code="a",
-                                      repo_id="hexgrad/Kokoro-82M",
-                                      device=device)
+                _PIPELINE = KPipeline(device=device, **kw)
             except Exception:
                 if device != "mps":
                     raise
                 print("warning: MPS backend failed, falling back to CPU")
                 device = "cpu"
-                _PIPELINE = KPipeline(lang_code="a",
-                                      repo_id="hexgrad/Kokoro-82M",
-                                      device="cpu")
+                _PIPELINE = KPipeline(device="cpu", **kw)
             _PIPE_STATE["device"] = device
             _PIPE_STATE["parked"] = False
         elif _PIPE_STATE["parked"]:
