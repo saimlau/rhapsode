@@ -710,6 +710,34 @@ def test_security_headers_are_present():
     assert "default-src 'self'" in csp and "frame-ancestors 'self'" in csp
 
 
+
+def test_malformed_bodies_are_rejected_not_crashed():
+    """Fuzzing found reachable 500s: any account could spray tracebacks into
+    the log and, on the position route, poison a stored value."""
+    app, lib, _u = _app()
+    c = TestClient(app)
+    h = _as(c, "mallory")
+    h["Content-Type"] = "application/json"
+    for raw in ('{"t": Infinity}', '{"t": NaN}', '{"t": -1}', '{"t": "abc"}'):
+        r = c.post("/api/papers/mallory-own/position", headers=h, content=raw)
+        assert r.status_code == 400, f"{raw} -> {r.status_code}"
+    for body in ({"order": "notalist"}, {"order": [1, 2]}, {"order": {}}):
+        assert c.put("/api/queue", headers=h, json=body).status_code == 400
+    assert c.put("/api/settings", headers=_as(c, "boss"),
+                 json={"auto_advance": "yes"}).status_code == 400
+    assert lib.data["papers"]["mallory-own"]["resume_t"] == 0.0
+
+
+def test_a_login_flood_is_throttled():
+    """Each attempt costs a deliberate scrypt hash; nginx limit_req is the
+    real defence but the app must not depend on the proxy being configured."""
+    app, _lib, _u = _app()
+    c = TestClient(app)
+    codes = [c.post("/login", data={"username": "mallory", "password": "wrong"},
+                    follow_redirects=False).status_code for _ in range(14)]
+    assert 429 in codes, f"no throttle: {sorted(set(codes))}"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

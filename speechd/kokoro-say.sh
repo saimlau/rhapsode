@@ -13,7 +13,13 @@ SPEED=$(awk "BEGIN { printf \"%.2f\", 2 ^ ($RATE_RAW / 100) }")
 TEXT=$(cat)
 [ -z "$TEXT" ] && exit 0
 
-curl -s --max-time 120 \
+# A server with a password answers 401, and without -f curl pipes that error
+# page straight to the audio player as if it were a WAV. RHAPSODE_AUTH is
+# "user:password"; unset, this behaves exactly as before on a local server.
+AUTH_ARGS=()
+[ -n "${RHAPSODE_AUTH:-}" ] && AUTH_ARGS=(-u "$RHAPSODE_AUTH")
+
+curl -sf --max-time 120 "${AUTH_ARGS[@]}" \
   --data-urlencode "text=$TEXT" \
   --data-urlencode "rate=$SPEED" \
   --data-urlencode "voice=$VOICE" \

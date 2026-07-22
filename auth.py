@@ -79,30 +79,40 @@ def load_secret(library_root):
     return raw
 
 
-def issue(secret, user="", ttl=DEFAULT_TTL):
-    """'<user>.<expiry>.<signature>'. The signature covers user AND expiry
-    together, so neither can be edited without invalidating the other."""
+def issue(secret, user="", ttl=DEFAULT_TTL, epoch=""):
+    """'<user>.<epoch>.<expiry>.<signature>'.
+
+    The signature covers all three together, so none can be edited alone. The
+    epoch is the account's current generation: rotating it (a password change,
+    a deletion, a recreated name) invalidates every session that account had,
+    which a username alone could never express.
+    """
     exp = str(int(time.time() + ttl))
-    payload = f"{_b64(user.encode())}.{exp}"
+    payload = f"{_b64(user.encode())}.{_b64(epoch.encode())}.{exp}"
     sig = hmac.new(secret, payload.encode(), hashlib.sha256).digest()
     return f"{payload}.{_b64(sig)}"
 
 
-def session_user(token, secret):
-    """The username this token authenticates, or None. Returns None for a
-    token that is malformed, wrongly signed, or expired — a caller that gets
-    a name back may trust it completely."""
+def session_claims(token, secret):
+    """(user, epoch) this token authenticates, or None. None for anything
+    malformed, wrongly signed, or expired — a caller that gets a name back
+    may trust it completely."""
     try:
-        user_b64, exp, sig = str(token).split(".", 2)
-        payload = f"{user_b64}.{exp}"
+        user_b64, epoch_b64, exp, sig = str(token).split(".", 3)
+        payload = f"{user_b64}.{epoch_b64}.{exp}"
         expect = hmac.new(secret, payload.encode(), hashlib.sha256).digest()
         if not hmac.compare_digest(_unb64(sig), expect):
             return None           # signature checked BEFORE trusting anything
         if int(exp) <= time.time():
             return None
-        return _unb64(user_b64).decode()
+        return _unb64(user_b64).decode(), _unb64(epoch_b64).decode()
     except Exception:
         return None
+
+
+def session_user(token, secret):
+    claims = session_claims(token, secret)
+    return claims[0] if claims else None
 
 
 def valid(token, secret):
@@ -179,6 +189,10 @@ class Users:
     def exists(self, name):
         return name in self.data["users"]
 
+    def epoch(self, name):
+        """The account's current generation, or "" if it does not exist."""
+        return self.data["users"].get(name, {}).get("epoch", "")
+
     def is_admin(self, name):
         return bool(self.data["users"].get(name, {}).get("admin"))
 
@@ -203,7 +217,8 @@ class Users:
                     raise ValueError("password must be at least 8 characters")
                 pw_hash = hash_password(password)
             self.data["users"][name] = {"pw": pw_hash, "admin": bool(admin),
-                                        "created": _now()}
+                                        "created": _now(),
+                                        "epoch": secrets.token_hex(8)}
             self.save()
             return name
 
@@ -221,6 +236,8 @@ class Users:
             if len(password or "") < 8:
                 raise ValueError("password must be at least 8 characters")
             self.data["users"][name]["pw"] = hash_password(password)
+            # a new password ends every session issued under the old one
+            self.data["users"][name]["epoch"] = secrets.token_hex(8)
             self.save()
 
     def delete(self, name):

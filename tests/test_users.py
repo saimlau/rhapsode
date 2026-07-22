@@ -34,18 +34,18 @@ def test_session_username_cannot_be_swapped():
     import base64
     k = b"k" * 32
     tok = auth.issue(k, "saimai")
-    _user, exp, sig = tok.split(".", 2)
+    _user, epoch, exp, sig = tok.split(".", 3)
     other = base64.urlsafe_b64encode(b"attacker").decode().rstrip("=")
-    assert auth.session_user(f"{other}.{exp}.{sig}", k) is None
+    assert auth.session_user(f"{other}.{epoch}.{exp}.{sig}", k) is None
     # and the expiry cannot be extended while keeping the name
-    assert auth.session_user(f"{_user}.{int(exp) + 99999}.{sig}", k) is None
+    assert auth.session_user(f"{_user}.{epoch}.{int(exp) + 99999}.{sig}", k) is None
 
 
 def test_session_rejects_expiry_and_wrong_key():
     k, other = b"k" * 32, b"j" * 32
     assert auth.session_user(auth.issue(k, "a", ttl=-1), k) is None
     assert auth.session_user(auth.issue(k, "a"), other) is None
-    for junk in ("", "x", "a.b", "a.b.c", None):
+    for junk in ("", "x", "a.b", "a.b.c", "a.b.c.d", None):
         assert auth.session_user(junk, k) is None
 
 
@@ -170,6 +170,32 @@ def test_failed_redeem_does_not_burn_a_good_invite():
             pass
     assert u.invite_ok(tok), "a rejected attempt must leave the invite usable"
     assert u.redeem(tok, "colleague", "a long enough password") == "colleague"
+
+
+
+def test_changing_a_password_ends_that_accounts_sessions():
+    """The epoch is the account generation; a username alone could never
+    express "this session predates the password change"."""
+    u = _users()
+    k = b"k" * 32
+    u.create("saimai", "the first long password")
+    tok = auth.issue(k, "saimai", epoch=u.epoch("saimai"))
+    assert auth.session_claims(tok, k)[1] == u.epoch("saimai")
+    u.set_password("saimai", "a different long password")
+    assert auth.session_claims(tok, k)[1] != u.epoch("saimai"), \
+        "the old session must no longer match the account"
+
+
+def test_a_recreated_name_gets_a_fresh_epoch():
+    u = _users()
+    u.create("boss", "a long enough password", admin=True)
+    u.create("temp", "a long enough password")
+    first = u.epoch("temp")
+    u.delete("temp")
+    assert u.epoch("temp") == ""
+    # (the name is also retired, but even if it were reissued the epoch
+    #  would differ, so the departed member's sessions cannot resume)
+    assert first != ""
 
 
 if __name__ == "__main__":

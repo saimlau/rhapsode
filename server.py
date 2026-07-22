@@ -9,6 +9,7 @@ import json
 import os
 import queue
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -22,6 +23,7 @@ import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
+from starlette.concurrency import run_in_threadpool
 
 import auth
 import rhapsode as p2a
@@ -400,18 +402,15 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             _user, _, pw = _b.b64decode(header[6:]).decode().partition(":")
         except Exception:
             return None
-        if multiuser:
-            who = users.check(_user, pw)
-            if who:
-                if len(_basic_ok) > 512:      # bounded: not a memory sink
-                    _basic_ok.clear()
-                _basic_ok[key] = (who, _users_rev())
-                return who
+        who = (users.check(_user, pw) if multiuser else
+               ("" if auth.verify_password(pw, auth_cfg.get("password_hash", ""))
+                else None))
+        if who is None:
             return None
-        if auth.verify_password(pw, auth_cfg.get("password_hash", "")):
-            _basic_ok[key] = (None, 0)
-            return True
-        return None
+        if len(_basic_ok) > 512:   # bounded in BOTH regimes: the single-user
+            _basic_ok.clear()      # branch is the one that is live today
+        _basic_ok[key] = (who or None, _users_rev())
+        return who or True
 
     @app.middleware("http")
     async def _require_login(request, call_next):
@@ -425,11 +424,24 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         if path in ("/login", "/logout") or path.startswith("/favicon") \
                 or path.startswith("/join"):
             return await call_next(request)
-        who = auth.session_user(request.cookies.get(auth.COOKIE, ""), secret)
-        if who is not None and (not multiuser or users.exists(who)):
-            request.state.user = who      # a deleted account stops working
-            return await call_next(request)
-        basic = _basic_valid(request.headers.get("authorization", ""))
+        claims = auth.session_claims(request.cookies.get(auth.COOKIE, ""), secret)
+        if claims is not None:
+            who, epoch = claims
+            # The epoch pins the session to the account generation it was
+            # issued under: a deleted account, a changed password, or a
+            # username later recreated all rotate it, and turning multiuser
+            # off changes the marker so an invitee's cookie stops working
+            # instead of silently becoming the single-user session.
+            want = (users.epoch(who) if multiuser and who
+                    else ("multi" if multiuser else "single"))
+            if epoch == want and (not multiuser or not who or users.exists(who)):
+                request.state.user = who
+                return await call_next(request)
+        # scrypt is deliberately expensive, and this middleware is async, so
+        # verifying inline froze the whole event loop for every other client
+        # for the duration — from an UNAUTHENTICATED request path.
+        basic = await run_in_threadpool(
+            _basic_valid, request.headers.get("authorization", ""))
         if basic:
             request.state.user = basic if isinstance(basic, str) else None
             return await call_next(request)
@@ -449,13 +461,32 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         return HTMLResponse(html)
 
     def _login_cookie(resp, who):
-        resp.set_cookie(auth.COOKIE, auth.issue(secret, who or ""),
+        resp.set_cookie(auth.COOKIE,
+                        auth.issue(secret, who or "",
+                                   epoch=users.epoch(who) if multiuser and who
+                                   else ("multi" if multiuser else "single")),
                         httponly=True, secure=True, samesite="lax",
                         max_age=auth.DEFAULT_TTL, path="/")
         return resp
 
+    # nginx limit_req is the right place for this (see docs/hosting.md), but
+    # the app must not depend on a correctly configured proxy for it: each
+    # attempt costs a deliberate scrypt hash.
+    _attempts = {}
+
+    def _throttled(key):
+        now = time.time()
+        hits = [t for t in _attempts.get(key, []) if now - t < 60]
+        _attempts[key] = hits + [now]
+        if len(_attempts) > 4096:            # bounded
+            _attempts.clear()
+        return len(hits) >= 10
+
     @app.post("/login")
-    def login_submit(username: str = Form(""), password: str = Form("")):
+    def login_submit(request: Request, username: str = Form(""),
+                     password: str = Form("")):
+        if _throttled(f"login:{request.client.host if request.client else '?'}"):
+            raise HTTPException(429, "too many attempts; wait a minute")
         who = users.check(username, password) if multiuser else (
             "" if auth.verify_password(password,
                                        auth_cfg.get("password_hash", "")) else None)
@@ -466,6 +497,16 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             Response(status_code=303, headers={"Location": "/dashboard"}), who)
 
     # ------------------------------------------------------------- invites
+    def _num(v):
+        """A number from a JSON body, or 400 — not a 500 traceback."""
+        try:
+            n = float(v if v is not None else 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "t must be a number")
+        if n != n or n in (float("inf"), float("-inf")) or n < 0:
+            raise HTTPException(400, "t must be a finite, non-negative number")
+        return n
+
     def _esc(v):
         return (str(v).replace("&", "&amp;").replace("<", "&lt;")
                 .replace(">", "&gt;").replace('"', "&quot;")
@@ -698,11 +739,12 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                 if entry.get("hash") == digest and visible(entry, owner):
                     return JSONResponse({"id": pid, "duplicate": True})
             pid = f"{slug or 'paper'}-{digest}"
-            if pid in lib.data["papers"]:
-                pid = f"{pid}-{owner}" if owner else pid
-                n = 2
-                while pid in lib.data["papers"]:
-                    pid, n = f"{slug}-{digest}-{owner or 'x'}-{n}", n + 1
+            # A colliding id means another account already holds this exact
+            # PDF. Disambiguating with the owner's name (or a counter) made
+            # the id's SHAPE reveal that, re-opening the oracle the dedupe
+            # check closes. A nonce reveals nothing.
+            while pid in lib.data["papers"]:
+                pid = f"{slug or 'paper'}-{digest}-{secrets.token_hex(3)}"
             lib.data["papers"][pid] = {"id": pid, "status": "reserving",
                                        "hash": digest, "owner": owner}
         try:
@@ -833,6 +875,9 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             if body.get("name"):
                 pl["name"] = str(body["name"]).strip()
             if "order" in body:
+                if not isinstance(body["order"], list) or \
+                        not all(isinstance(x, str) for x in body["order"]):
+                    raise HTTPException(400, "order must be a list of ids")
                 # compare against the caller-visible slice and splice it back,
                 # or the response is an oracle for members they cannot see
                 mine = [pid for pid in pl["order"]
@@ -909,13 +954,12 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             # a shared paper is read by several people; one listener's place
             # must not move everyone else's. Non-owners keep their own.
             with lib.lock:
-                entry.setdefault("resume_by", {})[who] = float(body.get("t", 0))
+                entry.setdefault("resume_by", {})[who] = _num(body.get("t"))
                 lib.touch(bump=False)
             return {"ok": True}
         # in-memory immediately, disk at most every 30 s (worst case on a
         # crash: the resume point is half a minute stale)
-        lib.update(pid, bump=False, persist=False,
-                   resume_t=float(body.get("t", 0)))
+        lib.update(pid, bump=False, persist=False, resume_t=_num(body.get("t")))
         return {"ok": True}
 
     @app.get("/api/status")
@@ -937,6 +981,8 @@ def create_app(lib, worker, auth_cfg=None, users=None):
     @app.put("/api/queue")
     def reorder(request: Request, body: dict):
         order = body.get("order", [])
+        if not isinstance(order, list) or not all(isinstance(x, str) for x in order):
+            raise HTTPException(400, "order must be a list of paper ids")
         who = caller(request)
         with lib.lock:
             if not multiuser or who is None:
@@ -969,12 +1015,15 @@ def create_app(lib, worker, auth_cfg=None, users=None):
 
     def _settings(body: dict):
         with lib.lock:
-            lib.data["settings"].update(
-                {k: v for k, v in body.items() if k in ("auto_advance",)})
+            if "auto_advance" in body:
+                if not isinstance(body["auto_advance"], bool):
+                    raise HTTPException(400, "auto_advance must be true or false")
+                lib.data["settings"]["auto_advance"] = body["auto_advance"]
             lib.save()
         return {"ok": True}
 
     payload_cache = {"key": None, "body": ""}
+    _streams = {}          # open SSE streams per caller
 
     @app.get("/api/events")
     async def events(request: Request):
@@ -985,9 +1034,19 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         # way: it previously pushed the whole registry to every open tab, which
         # handed every user every other user's paper ids, titles and errors.
         who = caller(request)
+        # every open tab holds a socket and a task; without a cap one client
+        # can exhaust the file-descriptor limit and wedge the server
+        if _streams.get(who, 0) >= 8:
+            raise HTTPException(429, "too many open event streams")
+        _streams[who] = _streams.get(who, 0) + 1
+
         async def gen():
             last, idle = 0, 0
             while True:
+                # a stream opened before the account was deleted would keep
+                # delivering that user's view forever; one dict lookup a tick
+                if multiuser and who is not None and not users.exists(who):
+                    return
                 v = lib.version
                 if v != last:
                     last, idle = v, 0
@@ -1005,7 +1064,15 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                 else:
                     idle += 1
                 await asyncio.sleep(0.7)
-        return StreamingResponse(gen(), media_type="text/event-stream")
+
+        async def counted():
+            try:
+                async for chunk in gen():
+                    yield chunk
+            finally:
+                _streams[who] = max(0, _streams.get(who, 1) - 1)
+
+        return StreamingResponse(counted(), media_type="text/event-stream")
 
     def _tts(text, rate, voice):
         """Speak arbitrary text with the warm Kokoro model → WAV bytes.
@@ -1091,7 +1158,13 @@ def _bootstrap_users(lib, auth_cfg):
             print("  [auth] multiuser is on but no password_hash is set; "
                   "no admin account was created", flush=True)
             return users
-        users.create(admin, None, admin=True, pw_hash=pw_hash)
+        try:
+            users.create(admin, None, admin=True, pw_hash=pw_hash)
+        except ValueError as e:
+            raise SystemExit(
+                f"error: [auth] admin_user={auth_cfg.get('admin_user')!r} is "
+                f"not a usable username ({e}). Use 3-32 characters from "
+                f"letters, digits, dot, dash or underscore.")
         print(f"  [auth] created admin account '{admin}' from the existing "
               f"password", flush=True)
     owner = users.admins()[0] if users.admins() else admin

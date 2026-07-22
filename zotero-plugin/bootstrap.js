@@ -55,7 +55,14 @@ function multipartBody(fileBytes, filename, fields) {
 
 function authHeaders() {
   const auth = Zotero.Prefs.get("extensions.rhapsode.server_auth", true) || "";
-  return auth ? { Authorization: "Basic " + btoa(String(auth)) } : {};
+  // btoa() takes a Latin-1 string: a password with any non-ASCII character
+  // either throws InvalidCharacterError or silently encodes the wrong bytes.
+  // Base64 the UTF-8 encoding instead, which is what the server decodes.
+  if (!auth) return {};
+  const bytes = new TextEncoder().encode(String(auth));
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return { Authorization: "Basic " + btoa(bin) };
 }
 
 function repoPath() {

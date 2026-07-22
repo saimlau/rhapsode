@@ -42,13 +42,16 @@ def test_token_rejects_tampering_and_wrong_key():
     secret, other = b"k" * 32, b"j" * 32
     tok = auth.issue(secret, "saimai", ttl=60)
     assert not auth.valid(tok, other), "signed with a different key"
-    user, exp, sig = tok.split(".", 2)
-    forged = f"{user}.{int(exp) + 99999}.{sig}"   # extend your own expiry
+    user, epoch, exp, sig = tok.split(".", 3)
+    forged = f"{user}.{epoch}.{int(exp) + 99999}.{sig}"   # extend your expiry
     assert not auth.valid(forged, secret), "expiry is inside the signature"
     import base64
     other_user = base64.urlsafe_b64encode(b"root").decode().rstrip("=")
-    assert not auth.valid(f"{other_user}.{exp}.{sig}", secret), \
+    assert not auth.valid(f"{other_user}.{epoch}.{exp}.{sig}", secret), \
         "the username is inside the signature too"
+    other_epoch = base64.urlsafe_b64encode(b"stale").decode().rstrip("=")
+    assert not auth.valid(f"{user}.{other_epoch}.{exp}.{sig}", secret), \
+        "the account generation is inside the signature too"
     for junk in ("", "abc", "1.2.3", "9999999999.zzzz", None):
         assert auth.valid(junk, secret) is False
 
