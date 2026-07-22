@@ -629,6 +629,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#accounts-for-a-few-colleagues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Accounts for a few colleagues
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Accounts for a few colleagues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inviting-someone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inviting someone
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-each-person-can-see" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each person can see
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rolling-it-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rolling it back
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#point-zotero-at-it" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -947,6 +1008,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#accounts-for-a-few-colleagues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Accounts for a few colleagues
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Accounts for a few colleagues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inviting-someone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inviting someone
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-each-person-can-see" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each person can see
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rolling-it-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rolling it back
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#point-zotero-at-it" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1002,10 +1124,10 @@ serves the read-along; the GPU work goes to <a href="../backends/">Modal</a>, wh
 starts a container per batch and bills only while it runs. A €4/month VPS
 with 2 vCPU and no GPU is enough.</p>
 <div class="admonition note">
-<p class="admonition-title">One account, several devices</p>
-<p>This is single-tenant: one password, one shared library. Everyone who
-logs in sees the same papers. Per-user accounts and private shelves are
-not built yet.</p>
+<p class="admonition-title">One password by default</p>
+<p>Out of the box this is single-tenant: one password, one shared library.
+<a href="#accounts-for-a-few-colleagues">Named accounts with private shelves</a> are
+a separate switch, off unless you turn it on.</p>
 </div>
 <h2 id="what-you-need">What you need<a class="headerlink" href="#what-you-need" title="Permanent link">&para;</a></h2>
 <ul>
@@ -1097,6 +1219,20 @@ TLS, and its login is designed to sit behind one.</p>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
+<p>If you enable accounts, add rate limiting for the two unauthenticated
+endpoints — each login attempt costs a deliberate scrypt hash, so an
+unthrottled flood is a cheap way to pin the CPU — and stop logging invite
+tokens:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># in the http { } block</span>
+<span class="k">limit_req_zone</span><span class="w"> </span><span class="nv">$binary_remote_addr</span><span class="w"> </span><span class="s">zone=rhapsode_auth:1m</span><span class="w"> </span><span class="s">rate=10r/m</span><span class="p">;</span>
+
+<span class="c1"># in the server { } block</span>
+<span class="k">location</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">/login</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kn">limit_req</span><span class="w"> </span><span class="s">zone=rhapsode_auth</span><span class="w"> </span><span class="s">burst=5</span><span class="w"> </span><span class="s">nodelay</span><span class="p">;</span>
+<span class="w">                    </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:7717</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="k">location</span><span class="w"> </span><span class="s">/join/</span><span class="w">  </span><span class="p">{</span><span class="w"> </span><span class="kn">limit_req</span><span class="w"> </span><span class="s">zone=rhapsode_auth</span><span class="w"> </span><span class="s">burst=5</span><span class="w"> </span><span class="s">nodelay</span><span class="p">;</span>
+<span class="w">                   </span><span class="kn">access_log</span><span class="w"> </span><span class="no">off</span><span class="p">;</span><span class="w">      </span><span class="c1"># the invite token is in the URL</span>
+<span class="w">                   </span><span class="kn">proxy_pass</span><span class="w"> </span><span class="s">http://127.0.0.1:7717</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
 <p>Two settings are easy to miss. Without <code>proxy_buffering off</code> the progress
 stream arrives in chunks and the queue looks frozen. Without a raised
 <code>client_max_body_size</code> a large PDF upload fails with 413 rather than a
@@ -1117,6 +1253,79 @@ the Zotero plugin authenticates, and it works for <code>curl</code> too:</p>
 </code></pre></div>
 <p>If no <code>password_hash</code> is configured, authentication is off entirely and a
 localhost install behaves exactly as it always has.</p>
+<h2 id="accounts-for-a-few-colleagues">Accounts for a few colleagues<a class="headerlink" href="#accounts-for-a-few-colleagues" title="Permanent link">&para;</a></h2>
+<p>Everything above is single-tenant: one password, one shared library. Named
+accounts are a separate switch.</p>
+<div class="admonition warning">
+<p class="admonition-title">Back up before you flip it</p>
+<p>The first start with <code>multiuser = true</code> rewrites <code>library.json</code> in
+place. Copy <code>library.json</code> and <code>users.json</code> somewhere off the server
+first — the automatic <code>.bak</code> is overwritten by the very next save.</p>
+</div>
+<div class="highlight"><pre><span></span><code><span class="k">[auth]</span>
+<span class="n">password_hash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;scrypt$...&quot;</span>
+<span class="n">multiuser</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="n">admin_user</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;saimai&quot;</span>
+</code></pre></div>
+<p>On the next start the server creates <code>admin_user</code> from the password you
+already use — so the flip cannot lock you out — and marks every existing
+paper as theirs, <strong>private</strong>. Colleagues see nothing until you share
+something with them.</p>
+<h3 id="inviting-someone">Inviting someone<a class="headerlink" href="#inviting-someone" title="Permanent link">&para;</a></h3>
+<p>Visit <code>/admin</code> (admins only). "Create an invite link" produces a single-use
+URL valid for 14 days; the invitee opens it, chooses their own username and
+password, and lands in an empty shelf. You never handle their password.</p>
+<p>Anyone holding that link can create an account, so send it the way you would
+send a password — and revoke it from the same page if it goes astray. It
+travels in a URL, so it also lands in browser history and the web server's
+access log; the nginx snippet below stops logging it.</p>
+<h3 id="what-each-person-can-see">What each person can see<a class="headerlink" href="#what-each-person-can-see" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>their own papers</th>
+<th>a shared paper</th>
+<th>someone else's private paper</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>read</td>
+<td>yes</td>
+<td>yes</td>
+<td>no — 404, indistinguishable from a wrong id</td>
+</tr>
+<tr>
+<td>regenerate, rename, delete</td>
+<td>yes</td>
+<td>no, only its owner</td>
+<td>no</td>
+</tr>
+<tr>
+<td>share</td>
+<td>yes</td>
+<td>no</td>
+<td>no</td>
+</tr>
+</tbody>
+</table>
+<p>Admins see and may change everything. Sharing a paper does not hand over
+control of it.</p>
+<p>Removing an account does <strong>not</strong> remove its papers: they keep an owner who
+can no longer sign in, and the username is retired so it can never be
+claimed by someone else (it would otherwise inherit that shelf). Reassign
+anything you still want first.</p>
+<h3 id="limits">Limits<a class="headerlink" href="#limits" title="Permanent link">&para;</a></h3>
+<p>Each non-admin account is capped at 200 papers, because every paper is GPU
+time on <strong>your</strong> Modal account. Raise <code>PAPERS_PER_USER</code> in <code>server.py</code> if
+that is wrong for your group. There is no bandwidth or disk quota beyond
+that — invite people you would lend your laptop to.</p>
+<h3 id="rolling-it-back">Rolling it back<a class="headerlink" href="#rolling-it-back" title="Permanent link">&para;</a></h3>
+<p>Set <code>multiuser = false</code> and restart. The single password works again and
+every paper stays where it is. Existing sessions are not invalidated by the
+change, so delete <code>.session_secret</code> in the library root at the same time if
+you are rolling back because an account was compromised.</p>
 <h2 id="point-zotero-at-it">Point Zotero at it<a class="headerlink" href="#point-zotero-at-it" title="Permanent link">&para;</a></h2>
 <p>In Zotero's Config Editor set <code>extensions.rhapsode.server_url</code> to your
 domain and <code>extensions.rhapsode.server_auth</code> to <code>user:password</code>. Details in
