@@ -170,6 +170,31 @@ def make_tags(pdf_path, meta):
 
 # ----------------------------------------------------------------- synthesis
 
+def _find_espeak_macos():
+    """Point phonemizer at Homebrew's libespeak-ng on macOS.
+
+    Kokoro phonemizes out-of-dictionary words through espeak-ng, and
+    phonemizer finds that shared library by searching the loader's default
+    paths. Homebrew installs outside them (/opt/homebrew on Apple Silicon,
+    /usr/local on Intel), so a Mac with espeak-ng correctly installed still
+    fails at the first unusual word. Setting the documented override is
+    enough; do it only when nothing has been configured and the file is
+    really there, so a working setup is never overridden.
+    """
+    if sys.platform != "darwin" or os.environ.get("PHONEMIZER_ESPEAK_LIBRARY"):
+        return
+    for lib in ("/opt/homebrew/lib/libespeak-ng.dylib",   # Apple Silicon
+                "/usr/local/lib/libespeak-ng.dylib"):     # Intel
+        if Path(lib).exists():
+            os.environ["PHONEMIZER_ESPEAK_LIBRARY"] = lib
+            try:    # newer phonemizer caches the path at import time
+                from phonemizer.backend.espeak.wrapper import EspeakWrapper
+                EspeakWrapper.set_library(lib)
+            except Exception:
+                pass
+            return
+
+
 def get_pipeline():
     """Load Kokoro on demand; queued papers reuse the warm model. The whole
     check-load-unpark sequence holds TTS_LOCK so concurrent first callers
@@ -177,6 +202,7 @@ def get_pipeline():
     global _PIPELINE
     with TTS_LOCK:
         if _PIPELINE is None:
+            _find_espeak_macos()
             import torch
             from kokoro import KPipeline
             mps = (getattr(torch.backends, "mps", None) is not None
