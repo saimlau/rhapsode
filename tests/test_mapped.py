@@ -154,4 +154,15 @@ assert clean_text("±18◦in roll") == "±18°in roll"
 assert "•" in clean_text("AJVR • Vol 77 • No. 5")
 assert "◦" in clean_text("a ◦ used as a bullet")
 
+
+# --- ...but not every Letterlike character should fold. Measured against
+# espeak, three are made WORSE: ™ is read "trade mark" but TM is "tee em";
+# № is "numero" but No is "no"; ℹ is "information" but i is "eye". Every
+# other character in the block is spelled out as a code point, so folding
+# those is a strict improvement.
+assert clean_text("ElectroPuls™ E10000") == "ElectroPuls™ E10000"
+assert clean_text("see № 5") == "see № 5"
+assert clean_text("ℹ note") == "ℹ note"
+assert clean_text("a length ℓ") == "a length l"      # still folded
+
 print("all MappedText tests passed")

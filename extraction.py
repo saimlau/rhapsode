@@ -164,11 +164,19 @@ MATH_DOUBLE = r"([\U0001D400-\U0001D7FF])\1+"
 # (PLANCK CONSTANT, used as an italic h), ℓ, ℝ, ℃. Both spell out as code
 # points otherwise: "E = (4ℎ2 + 12ℎ𝑘)" was read "four letter two one zero E
 # two plus twelve letter two one zero E...".
+# ...except the handful espeak ALREADY has a word for, where folding makes it
+# worse. Measured, not assumed: "™" is read "trade mark" but folds to TM
+# ("tee em"); "№" is read "numero" but folds to No ("no"); "ℹ" is read
+# "information" but folds to i ("eye"). Every other character in the block is
+# spelled out as a code point, so the fold is a strict improvement.
+FOLD_EXCEPTIONS = "™№ℹ"
+
 MATH_ALPHANUMERIC = {
     chr(cp): unicodedata.normalize("NFKC", chr(cp))
     for start, end in ((0x1D400, 0x1D800), (0x2100, 0x2150))
     for cp in range(start, end)
     if unicodedata.normalize("NFKC", chr(cp)) != chr(cp)
+    and chr(cp) not in FOLD_EXCEPTIONS
 }
 
 # Scripts that cannot appear in a paper this narrator can read, and in

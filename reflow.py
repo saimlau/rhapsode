@@ -75,12 +75,39 @@ _ABBREV = {"fig", "figs", "eq", "eqs", "no", "nos", "vs", "al", "et", "e.g",
 _SENT_END = re.compile(r'[.!?][")\']?$')
 
 
+# A document-delivery or interlibrary-loan cover sheet prepended to a scan.
+# Asking the model to drop it was not enough — one paper narrated three
+# minutes of "Thank you for using our service" and photocopy notices anyway —
+# so the page is removed before the model ever sees it. Deliberately narrow:
+# these phrases belong to delivery paperwork, not to any paper's own prose.
+COVER_SHEET_RE = re.compile(
+    r"thank you for using our service"
+    r"|interlibrary\s+(?:services|loan)"
+    r"|article\s+express"
+    r"|\billiad\b"
+    r"|notice\s+warning\s+concerning\s+copyright\s+restrictions",
+    re.I)
+
+
+def _is_cover_sheet(page):
+    """True for a delivery cover sheet: it must both say so and carry no real
+    prose, so a paper that merely discusses copyright law is left alone."""
+    text = page.get_text()
+    if not COVER_SHEET_RE.search(text):
+        return False
+    return len(text) < 4000        # a cover sheet is a page of notices
+
+
 def _gather_blocks(doc):
     """[{id,page,x0,y0,x1,y1,text,words}] — words as (page,x0,y0,x1,y1,text),
     assigned to the block whose bbox contains their centre (robust to any
     block-vs-word index mismatch)."""
     blocks = []
     for pi, page in enumerate(doc):
+        # only the front of a file can be a cover sheet; a later page saying
+        # "interlibrary" is the paper's own content
+        if pi < 2 and _is_cover_sheet(page):
+            continue
         page_blocks = []
         for b in page.get_text("blocks"):
             x0, y0, x1, y1, txt, _no, typ = b

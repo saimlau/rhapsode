@@ -113,6 +113,37 @@ def test_dropcap_only_joins_a_lowercase_continuation():
     assert [t[0] for t in toks] == ["R", "Smith"]
 
 
+
+class _FakePage:
+    def __init__(self, text):
+        self._t = text
+
+    def get_text(self, kind="text"):
+        return self._t if kind == "text" else []
+
+
+def test_delivery_cover_sheet_is_recognised():
+    """Asking the model to drop it was not enough — one paper narrated three
+    minutes of library boilerplate anyway."""
+    assert reflow._is_cover_sheet(_FakePage(
+        "Thank you for using our service!\nInterlibrary Services\n"
+        "The Ohio State University Libraries\nArticle Express documents are "
+        "delivered 24/7 directly to your ILLiad account."))
+    assert reflow._is_cover_sheet(_FakePage(
+        "NOTICE WARNING CONCERNING COPYRIGHT RESTRICTIONS\n"
+        "The copyright law of the United States governs photocopying."))
+
+
+def test_a_paper_that_merely_discusses_copyright_is_kept():
+    """The filter needs both the phrasing AND the absence of real prose, or a
+    paper about library science would lose its first page."""
+    prose = ("Interlibrary loan requests have grown steadily since 2005. " * 90)
+    assert len(prose) > 4000
+    assert not reflow._is_cover_sheet(_FakePage(prose))
+    assert not reflow._is_cover_sheet(_FakePage(
+        "A study of mandibular reconstruction plates under cyclic loading."))
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

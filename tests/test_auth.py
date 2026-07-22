@@ -37,12 +37,18 @@ def test_token_valid_then_expired():
 
 
 def test_token_rejects_tampering_and_wrong_key():
+    """Tokens are '<user>.<expiry>.<signature>' — the signature covers the
+    user and the expiry together, so neither can be edited on its own."""
     secret, other = b"k" * 32, b"j" * 32
-    tok = auth.issue(secret, ttl=60)
+    tok = auth.issue(secret, "saimai", ttl=60)
     assert not auth.valid(tok, other), "signed with a different key"
-    exp, sig = tok.split(".", 1)
-    forged = f"{int(exp) + 99999}.{sig}"          # extend your own expiry
+    user, exp, sig = tok.split(".", 2)
+    forged = f"{user}.{int(exp) + 99999}.{sig}"   # extend your own expiry
     assert not auth.valid(forged, secret), "expiry is inside the signature"
+    import base64
+    other_user = base64.urlsafe_b64encode(b"root").decode().rstrip("=")
+    assert not auth.valid(f"{other_user}.{exp}.{sig}", secret), \
+        "the username is inside the signature too"
     for junk in ("", "abc", "1.2.3", "9999999999.zzzz", None):
         assert auth.valid(junk, secret) is False
 

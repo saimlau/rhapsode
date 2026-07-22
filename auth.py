@@ -14,6 +14,8 @@ puts the hash in config.toml under [auth] password_hash.
 """
 
 import base64
+import json
+import re
 import hashlib
 import hmac
 import os
@@ -76,19 +78,175 @@ def load_secret(library_root):
     return raw
 
 
-def issue(secret, ttl=DEFAULT_TTL):
+def issue(secret, user="", ttl=DEFAULT_TTL):
+    """'<user>.<expiry>.<signature>'. The signature covers user AND expiry
+    together, so neither can be edited without invalidating the other."""
     exp = str(int(time.time() + ttl))
-    sig = hmac.new(secret, exp.encode(), hashlib.sha256).digest()
-    return f"{exp}.{_b64(sig)}"
+    payload = f"{_b64(user.encode())}.{exp}"
+    sig = hmac.new(secret, payload.encode(), hashlib.sha256).digest()
+    return f"{payload}.{_b64(sig)}"
+
+
+def session_user(token, secret):
+    """The username this token authenticates, or None. Returns None for a
+    token that is malformed, wrongly signed, or expired — a caller that gets
+    a name back may trust it completely."""
+    try:
+        user_b64, exp, sig = str(token).split(".", 2)
+        payload = f"{user_b64}.{exp}"
+        expect = hmac.new(secret, payload.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(_unb64(sig), expect):
+            return None           # signature checked BEFORE trusting anything
+        if int(exp) <= time.time():
+            return None
+        return _unb64(user_b64).decode()
+    except Exception:
+        return None
 
 
 def valid(token, secret):
     """True only for a well-formed, correctly signed, unexpired token."""
-    try:
-        exp, sig = str(token).split(".", 1)
-        expect = hmac.new(secret, exp.encode(), hashlib.sha256).digest()
-        if not hmac.compare_digest(_unb64(sig), expect):
-            return False          # signature checked BEFORE trusting expiry
-        return int(exp) > time.time()
-    except Exception:
-        return False
+    return session_user(token, secret) is not None
+
+
+# ------------------------------------------------------------------ users
+
+USERS_FILE = "users.json"
+INVITE_TTL = 14 * 24 * 3600            # a link that lingers forever is a key
+
+
+def _now():
+    return int(time.time())
+
+
+class Users:
+    """Accounts and invite tokens, in a 0600 file beside the library.
+
+    Invite tokens are stored HASHED, exactly like passwords: whoever reads
+    users.json must not come away with working invite links. The token itself
+    exists only in the URL the admin copies once.
+    """
+
+    def __init__(self, library_root):
+        self.path = Path(library_root) / USERS_FILE
+        self.data = {"users": {}, "invites": {}}
+        self.load()
+
+    # -- persistence ---------------------------------------------------
+    def load(self):
+        try:
+            self.data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            pass
+        self.data.setdefault("users", {})
+        self.data.setdefault("invites", {})
+        return self.data
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(self.data, f, indent=1)
+        os.replace(tmp, self.path)      # atomic; never a half-written file
+        try:
+            os.chmod(self.path, 0o600)  # it holds password hashes
+        except OSError:
+            pass
+
+    # -- accounts ------------------------------------------------------
+    def exists(self, name):
+        return name in self.data["users"]
+
+    def is_admin(self, name):
+        return bool(self.data["users"].get(name, {}).get("admin"))
+
+    def names(self):
+        return sorted(self.data["users"])
+
+    def admins(self):
+        return [n for n in self.data["users"] if self.is_admin(n)]
+
+    def create(self, name, password, admin=False, pw_hash=None):
+        name = normalise_username(name)
+        if not name:
+            raise ValueError("username must be 3-32 characters: letters, "
+                             "digits, dot, dash or underscore")
+        if self.exists(name):
+            raise ValueError("that username is taken")
+        if pw_hash is None:
+            if len(password or "") < 8:
+                raise ValueError("password must be at least 8 characters")
+            pw_hash = hash_password(password)
+        self.data["users"][name] = {"pw": pw_hash, "admin": bool(admin),
+                                    "created": _now()}
+        self.save()
+        return name
+
+    def check(self, name, password):
+        """The username the credentials authenticate, or None. Always runs a
+        scrypt hash so a missing account costs the same as a wrong password
+        and cannot be told apart by timing."""
+        entry = self.data["users"].get(normalise_username(name) or "")
+        stored = entry["pw"] if entry else DUMMY_HASH
+        ok = verify_password(password or "", stored)
+        return normalise_username(name) if (ok and entry) else None
+
+    def set_password(self, name, password):
+        if len(password or "") < 8:
+            raise ValueError("password must be at least 8 characters")
+        self.data["users"][name]["pw"] = hash_password(password)
+        self.save()
+
+    def delete(self, name):
+        if name not in self.data["users"]:
+            raise ValueError("no such user")
+        if self.is_admin(name) and len(self.admins()) == 1:
+            raise ValueError("that is the only admin; promote another first")
+        del self.data["users"][name]
+        self.save()
+
+    # -- invites -------------------------------------------------------
+    def mint_invite(self, by, ttl=INVITE_TTL):
+        """Returns the raw token — the only time it exists in clear."""
+        token = secrets.token_urlsafe(24)
+        self.data["invites"][_token_key(token)] = {
+            "created": _now(), "expires": _now() + ttl,
+            "by": by, "used_by": None}
+        self.save()
+        return token
+
+    def invite_ok(self, token):
+        inv = self.data["invites"].get(_token_key(token or ""))
+        return bool(inv and not inv["used_by"] and inv["expires"] > _now())
+
+    def redeem(self, token, name, password):
+        """Create the account this invite is for, and burn the invite."""
+        key = _token_key(token or "")
+        if not self.invite_ok(token):
+            raise ValueError("this invite link is invalid, used or expired")
+        created = self.create(name, password)
+        self.data["invites"][key]["used_by"] = created
+        self.data["invites"][key]["used_at"] = _now()
+        self.save()
+        return created
+
+    def open_invites(self):
+        return [{"by": v["by"], "created": v["created"], "expires": v["expires"]}
+                for v in self.data["invites"].values()
+                if not v["used_by"] and v["expires"] > _now()]
+
+
+def _token_key(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
+# a real scrypt hash of nothing in particular: verifying against it makes an
+# unknown username cost the same as a known one
+DUMMY_HASH = hash_password("rhapsode-timing-equaliser")
+
+
+def normalise_username(name):
+    name = (name or "").strip().lower()
+    return name if USERNAME_RE.match(name) else ""

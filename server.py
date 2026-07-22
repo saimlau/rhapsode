@@ -16,9 +16,10 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import uvicorn
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
 
@@ -289,10 +290,45 @@ class Worker(threading.Thread):
                     grobid.touch()
 
 
-def create_app(lib, worker, auth_cfg=None):
+def create_app(lib, worker, auth_cfg=None, users=None):
     app = FastAPI(title="Rhapsode")
     auth_cfg = auth_cfg or {}
     secret = auth.load_secret(lib.root)
+    multiuser = users is not None
+
+    # ---------------------------------------------------------- ownership
+    # Storage is one registry with an owner per paper, so isolation is a code
+    # invariant rather than a filesystem boundary. It therefore lives in
+    # exactly these three helpers, and every route that names a paper goes
+    # through one of them — the direct-object routes (/view, /api/papers/{id})
+    # matter more than the listing, since an id can be guessed.
+    def caller(request):
+        """Username for this request, or None when accounts are off."""
+        return getattr(request.state, "user", None) if multiuser else None
+
+    def visible(entry, who):
+        if not multiuser or who is None:
+            return True
+        return entry.get("owner") == who or entry.get("shared") or \
+            users.is_admin(who)
+
+    def see(pid, request):
+        """The paper, if this caller may see it — 404 otherwise, never 403:
+        a wrong id and someone else's id must be indistinguishable."""
+        entry = lib.paper(pid)
+        if not visible(entry, caller(request)):
+            raise HTTPException(404, "unknown paper")
+        return entry
+
+    def own(pid, request):
+        """The paper, if this caller may change it. Sharing a paper does not
+        hand over control of it, so `shared` is deliberately not enough."""
+        entry = see(pid, request)
+        who = caller(request)
+        if multiuser and who is not None and entry.get("owner") != who \
+                and not users.is_admin(who):
+            raise HTTPException(403, "that paper belongs to someone else")
+        return entry
 
     @app.middleware("http")
     async def _touch_activity(request, call_next):
@@ -304,24 +340,30 @@ def create_app(lib, worker, auth_cfg=None):
 
     # scrypt is deliberately slow, so remember Basic headers that already
     # verified — machine clients (the Zotero plugin) send one per request
-    _basic_ok = set()
+    _basic_ok = {}          # header hash -> username (None in single-user)
 
     def _basic_valid(header):
         if not header.startswith("Basic "):
-            return False
+            return None
         import hashlib as _h
         key = _h.sha256(header.encode()).hexdigest()
         if key in _basic_ok:
-            return True
+            return _basic_ok[key] or True
         try:
             import base64 as _b
             _user, _, pw = _b.b64decode(header[6:]).decode().partition(":")
         except Exception:
-            return False
+            return None
+        if multiuser:
+            who = users.check(_user, pw)
+            if who:
+                _basic_ok[key] = who
+                return who
+            return None
         if auth.verify_password(pw, auth_cfg.get("password_hash", "")):
-            _basic_ok.add(key)
+            _basic_ok[key] = None
             return True
-        return False
+        return None
 
     @app.middleware("http")
     async def _require_login(request, call_next):
@@ -329,14 +371,19 @@ def create_app(lib, worker, auth_cfg=None):
         localhost install keeps working exactly as before. Browsers carry the
         session cookie; machine clients (Zotero plugin, speechd, curl) may
         send HTTP Basic with the same password instead."""
-        if not auth_cfg.get("password_hash"):
+        if not auth_cfg.get("password_hash") and not multiuser:
             return await call_next(request)
         path = request.url.path
-        if path in ("/login", "/logout") or path.startswith("/favicon"):
+        if path in ("/login", "/logout") or path.startswith("/favicon") \
+                or path.startswith("/join"):
             return await call_next(request)
-        if auth.valid(request.cookies.get(auth.COOKIE, ""), secret):
+        who = auth.session_user(request.cookies.get(auth.COOKIE, ""), secret)
+        if who is not None and (not multiuser or users.exists(who)):
+            request.state.user = who      # a deleted account stops working
             return await call_next(request)
-        if _basic_valid(request.headers.get("authorization", "")):
+        basic = _basic_valid(request.headers.get("authorization", ""))
+        if basic:
+            request.state.user = basic if isinstance(basic, str) else None
             return await call_next(request)
         # a browser gets the login page; an API caller gets a clean 401
         if path.startswith("/api/") or path.startswith("/tts"):
@@ -353,17 +400,98 @@ def create_app(lib, worker, auth_cfg=None):
             html = html.replace('<p class="bad">', '<p class="bad" hidden>')
         return HTMLResponse(html)
 
+    def _login_cookie(resp, who):
+        resp.set_cookie(auth.COOKIE, auth.issue(secret, who or ""),
+                        httponly=True, secure=True, samesite="lax",
+                        max_age=auth.DEFAULT_TTL, path="/")
+        return resp
+
     @app.post("/login")
-    def login_submit(password: str = Form("")):
-        if not auth.verify_password(password,
-                                    auth_cfg.get("password_hash", "")):
+    def login_submit(username: str = Form(""), password: str = Form("")):
+        who = users.check(username, password) if multiuser else (
+            "" if auth.verify_password(password,
+                                       auth_cfg.get("password_hash", "")) else None)
+        if who is None:
             # same page, same wording, no hint about which part was wrong
             return Response(status_code=303, headers={"Location": "/login?bad=1"})
-        resp = Response(status_code=303, headers={"Location": "/dashboard"})
-        resp.set_cookie(auth.COOKIE, auth.issue(secret), httponly=True,
-                        secure=True, samesite="lax", max_age=auth.DEFAULT_TTL,
-                        path="/")
-        return resp
+        return _login_cookie(
+            Response(status_code=303, headers={"Location": "/dashboard"}), who)
+
+    # ------------------------------------------------------------- invites
+    @app.get("/join/{token}", response_class=HTMLResponse)
+    def join_page(token: str, bad: str = ""):
+        page = REPO / "join.html"
+        if not multiuser or not page.is_file():
+            raise HTTPException(404, "not found")
+        if not users.invite_ok(token):
+            return HTMLResponse(page.read_text()
+                                .replace("{{token}}", "")
+                                .replace("{{error}}", "This invite link is "
+                                         "invalid, already used, or expired.")
+                                .replace("{{formhidden}}", "hidden"),
+                                status_code=410)
+        return HTMLResponse(page.read_text()
+                            .replace("{{token}}", token)
+                            .replace("{{error}}", bad)
+                            .replace("{{formhidden}}", ""))
+
+    @app.post("/join/{token}")
+    def join_submit(token: str, username: str = Form(""),
+                    password: str = Form("")):
+        if not multiuser:
+            raise HTTPException(404, "not found")
+        try:
+            who = users.redeem(token, username, password)
+        except ValueError as e:
+            return Response(status_code=303, headers={
+                "Location": f"/join/{token}?bad={quote(str(e))}"})
+        return _login_cookie(
+            Response(status_code=303, headers={"Location": "/dashboard"}), who)
+
+    @app.get("/api/me")
+    def whoami(request: Request):
+        who = caller(request)
+        return {"user": who, "admin": bool(who and users.is_admin(who)),
+                "multiuser": multiuser}
+
+    @app.post("/api/invites")
+    def make_invite(request: Request):
+        who = caller(request)
+        if not multiuser or not who or not users.is_admin(who):
+            raise HTTPException(403, "admins only")
+        token = users.mint_invite(who)
+        return {"token": token, "path": f"/join/{token}"}
+
+    @app.get("/api/users")
+    def list_users(request: Request):
+        who = caller(request)
+        if not multiuser or not who or not users.is_admin(who):
+            raise HTTPException(403, "admins only")
+        counts = {}
+        for entry in lib.snapshot()["papers"].values():
+            counts[entry.get("owner")] = counts.get(entry.get("owner"), 0) + 1
+        return {"users": [{"name": n, "admin": users.is_admin(n),
+                           "papers": counts.get(n, 0)} for n in users.names()],
+                "invites": users.open_invites()}
+
+    @app.delete("/api/users/{name}")
+    def remove_user(name: str, request: Request):
+        who = caller(request)
+        if not multiuser or not who or not users.is_admin(who):
+            raise HTTPException(403, "admins only")
+        try:
+            users.delete(name)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @app.post("/api/papers/{pid}/share")
+    def share_paper(pid: str, request: Request, body: dict = None):
+        entry = own(pid, request)
+        with lib.lock:
+            entry["shared"] = bool((body or {}).get("shared", True))
+            lib.save()
+        return {"ok": True, "shared": entry["shared"]}
 
     @app.post("/logout")
     def logout():
@@ -380,8 +508,13 @@ def create_app(lib, worker, auth_cfg=None):
         return HTMLResponse(page.read_text())
 
     @app.get("/api/dashboard")
-    def dashboard_data():
+    def dashboard_data(request: Request):
         snap = lib.snapshot()
+        who = caller(request)
+        if multiuser and who is not None:
+            snap["papers"] = {pid: e for pid, e in snap["papers"].items()
+                              if visible(e, who)}
+            snap["order"] = [x for x in snap["order"] if x in snap["papers"]]
         papers = snap["papers"]
         by_status = {}
         hours = 0.0
@@ -439,10 +572,20 @@ def create_app(lib, worker, auth_cfg=None):
         return page.read_text(encoding="utf-8")
 
     @app.get("/api/library")
-    def get_library():
-        return lib.snapshot()
+    def get_library(request: Request):
+        snap = lib.snapshot()
+        who = caller(request)
+        if multiuser and who is not None:
+            snap["papers"] = {pid: e for pid, e in snap["papers"].items()
+                              if visible(e, who)}
+            snap["order"] = [pid for pid in snap["order"]
+                             if pid in snap["papers"]]
+            for pl in snap.get("playlists", {}).values():
+                pl["order"] = [pid for pid in pl["order"]
+                               if pid in snap["papers"]]
+        return snap
 
-    def _ingest(filename, data):
+    def _ingest(filename, data, owner=None):
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "file exceeds 100 MB")
         if not data.startswith(b"%PDF"):
@@ -450,11 +593,16 @@ def create_app(lib, worker, auth_cfg=None):
         digest = hashlib.sha1(data).hexdigest()[:10]
         with lib.lock:
             for pid, entry in lib.data["papers"].items():
-                if entry.get("hash") == digest:
+                # dedupe only against papers this caller can already see:
+                # answering "you already have that" about someone else's
+                # private paper would confirm they hold it
+                if entry.get("hash") == digest and visible(entry, owner):
                     return JSONResponse({"id": pid, "duplicate": True})
         slug = re.sub(r"[^A-Za-z0-9._-]+", "-",
                       Path(filename or "paper").stem)[:40].strip("-.")
         pid = f"{slug or 'paper'}-{digest}"
+        if owner and pid in lib.data["papers"]:
+            pid = f"{pid}-{owner}"      # same PDF, another user's own copy
         paper_dir = lib.root / pid
         paper_dir.mkdir(parents=True, exist_ok=True)
         (paper_dir / "paper.pdf").write_bytes(data)
@@ -463,7 +611,7 @@ def create_app(lib, worker, auth_cfg=None):
                  "title": Path(filename or pid).stem, "authors": None,
                  "year": None, "status": "pending", "progress": 0.0,
                  "error": None, "duration": None, "resume_t": 0.0,
-                 "added": time.time()}
+                 "added": time.time(), "owner": owner, "shared": False}
         try:  # fast CPU pass: real title/authors on the card immediately
             # capped to the front matter — a full-document pass on a long
             # PDF blows past the Zotero plugin's HTTP timeout
@@ -503,10 +651,11 @@ def create_app(lib, worker, auth_cfg=None):
         return plid
 
     @app.post("/api/papers")
-    def add_paper(file: UploadFile, title: str = Form(""),
+    def add_paper(request: Request, file: UploadFile, title: str = Form(""),
                   authors: str = Form(""), year: str = Form(""),
                   playlist: str = Form("")):
-        resp = _ingest(file.filename, file.file.read(MAX_UPLOAD + 1))
+        resp = _ingest(file.filename, file.file.read(MAX_UPLOAD + 1),
+                       caller(request))
         pid = json.loads(resp.body)["id"]
         plid = _apply_meta(pid, {"title": title, "authors": authors,
                                  "year": year, "playlist": playlist})
@@ -515,13 +664,13 @@ def create_app(lib, worker, auth_cfg=None):
         return resp
 
     @app.post("/api/papers/by-path")
-    def add_by_path(body: dict):
+    def add_by_path(request: Request, body: dict):
         """Ingest a local PDF by absolute path (used by the Zotero plugin
         against a localhost server; remote plugins upload via /api/papers)."""
         src = Path(str(body.get("path", ""))).expanduser()
         if not src.is_file():
             raise HTTPException(404, f"no such file: {src}")
-        resp = _ingest(src.name, src.read_bytes())
+        resp = _ingest(src.name, src.read_bytes(), caller(request))
         pid = json.loads(resp.body)["id"]
         plid = _apply_meta(pid, body)
         if plid:
@@ -584,7 +733,8 @@ def create_app(lib, worker, auth_cfg=None):
         return {"ok": True}
 
     @app.delete("/api/papers/{pid}")
-    def delete_paper(pid: str):
+    def delete_paper(pid: str, request: Request):
+        own(pid, request)
         with lib.lock:
             entry = lib.paper(pid)
             if entry["status"] == "generating":
@@ -598,7 +748,8 @@ def create_app(lib, worker, auth_cfg=None):
         return {"ok": True}
 
     @app.post("/api/papers/{pid}/regenerate")
-    def regenerate(pid: str):
+    def regenerate(pid: str, request: Request):
+        own(pid, request)
         with lib.lock:
             entry = lib.paper(pid)
             if entry["status"] in ("generating", "pending"):
@@ -609,8 +760,8 @@ def create_app(lib, worker, auth_cfg=None):
         return {"ok": True, "queued": True}
 
     @app.post("/api/papers/{pid}/position")
-    def position(pid: str, body: dict):
-        lib.paper(pid)
+    def position(pid: str, request: Request, body: dict):
+        see(pid, request)
         # in-memory immediately, disk at most every 30 s (worst case on a
         # crash: the resume point is half a minute stale)
         lib.update(pid, bump=False, persist=False,
@@ -629,13 +780,26 @@ def create_app(lib, worker, auth_cfg=None):
                 "papers": counts, "queue": worker.q.qsize()}
 
     @app.put("/api/queue")
-    def reorder(body: dict):
+    def reorder(request: Request, body: dict):
         order = body.get("order", [])
+        who = caller(request)
         with lib.lock:
-            if sorted(order) != sorted(lib.data["order"]):
-                raise HTTPException(400, "order must contain exactly the "
-                                         "current paper ids")
-            lib.data["order"] = order
+            if not multiuser or who is None:
+                if sorted(order) != sorted(lib.data["order"]):
+                    raise HTTPException(400, "order must contain exactly the "
+                                             "current paper ids")
+                lib.data["order"] = order
+            else:
+                # the caller can only see their own slice, so they may only
+                # permute that slice; other users' papers keep their places
+                mine = [pid for pid in lib.data["order"]
+                        if visible(lib.data["papers"][pid], who)]
+                if sorted(order) != sorted(mine):
+                    raise HTTPException(400, "order must contain exactly the "
+                                             "papers you can see")
+                it = iter(order)
+                lib.data["order"] = [next(it) if pid in set(mine) else pid
+                                     for pid in lib.data["order"]]
             lib.save()
         return {"ok": True}
 
@@ -719,8 +883,8 @@ def create_app(lib, worker, auth_cfg=None):
         return _tts(text, rate, voice)
 
     @app.get("/view/{pid}/{path:path}")
-    def view(pid: str, path: str = ""):
-        lib.paper(pid)
+    def view(pid: str, request: Request, path: str = ""):
+        see(pid, request)          # the audio itself, not just the listing
         base = lib.view_dir(pid).resolve()
         target = (base / (path or "index.html")).resolve()
         if base != target and base not in target.parents:
@@ -740,6 +904,42 @@ def _free_port(start):
     raise RuntimeError(f"no free port in {start}..{start + 9}")
 
 
+def _bootstrap_users(lib, auth_cfg):
+    """Turn a single-password install into a named-account one, once.
+
+    Returns the Users store, or None to stay single-user. Both steps are
+    idempotent: the operator's existing password keeps working (so an upgrade
+    cannot lock them out), and every paper that predates accounts becomes
+    theirs, private.
+    """
+    if not auth_cfg.get("multiuser"):
+        return None
+    users = auth.Users(lib.root)
+    admin = auth.normalise_username(auth_cfg.get("admin_user") or "admin")
+    if not users.names():
+        pw_hash = auth_cfg.get("password_hash")
+        if not pw_hash:
+            print("  [auth] multiuser is on but no password_hash is set; "
+                  "no admin account was created", flush=True)
+            return users
+        users.create(admin, None, admin=True, pw_hash=pw_hash)
+        print(f"  [auth] created admin account '{admin}' from the existing "
+              f"password", flush=True)
+    owner = users.admins()[0] if users.admins() else admin
+    with lib.lock:
+        changed = 0
+        for entry in lib.data["papers"].values():
+            if entry.get("owner") is None:
+                entry["owner"] = owner       # papers predating accounts
+                entry.setdefault("shared", False)
+                changed += 1
+        if changed:
+            lib.save()
+            print(f"  [auth] {changed} existing paper(s) now owned by "
+                  f"'{owner}', private", flush=True)
+    return users
+
+
 def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
         tts_cfg=None, idle_exit_min=0, llm_cfg=None, auth_cfg=None):
     root = Path(root)
@@ -749,6 +949,7 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     root.mkdir(parents=True, exist_ok=True)
 
     lib = Library(root)
+    users = _bootstrap_users(lib, auth_cfg or {})
     worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg, idle_exit_min,
                     llm_cfg)
     with lib.lock:  # crash recovery: re-queue anything left mid-generation
@@ -775,7 +976,7 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     # never-ending SSE streams would make graceful shutdown wait forever
     # (Ctrl+C seemingly dead); force-close connections after a short grace
     try:
-        uvicorn.run(create_app(lib, worker, auth_cfg), host="127.0.0.1",
+        uvicorn.run(create_app(lib, worker, auth_cfg, users), host="127.0.0.1",
                     port=port,
                     log_level="warning", timeout_graceful_shutdown=3)
     finally:
