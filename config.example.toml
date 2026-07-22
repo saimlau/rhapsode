@@ -122,3 +122,8 @@ idle_stop_s = 600
 # password_hash = "scrypt$..."   # python -c "import auth; print(auth.hash_password('...'))"
 # multiuser = false
 # admin_user = "admin"
+# Set true ONLY behind a reverse proxy that overwrites or appends
+# X-Forwarded-For (the documented nginx does). Off by default, the
+# rate-limiter keys on the socket peer — which is unspoofable, but
+# behind a proxy that means all users share one bucket.
+# trust_proxy = false

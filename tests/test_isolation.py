@@ -829,6 +829,61 @@ def test_sse_stream_ends_on_a_password_change():
     assert asyncio.run(run()), "the stream outlived the password change"
 
 
+
+# --------------------------------------------------------------------
+# Fourth review pass (2026-07-22): the two throttle findings are
+# regressions of the third pass's own throttle fix.
+# --------------------------------------------------------------------
+
+def test_xff_spoof_does_not_bypass_the_throttle():
+    """_client_ip must default to the unspoofable socket peer: an attacker
+    rotating X-Forwarded-For per request must not land in a fresh bucket and
+    walk past the scrypt throttle on either /login or the Basic path."""
+    app, _lib, _u = _app()
+    c = TestClient(app, raise_server_exceptions=False)
+    basic = [c.get("/api/library", headers={
+        "Authorization": "Basic " + base64.b64encode(f"m:wrong{i}".encode()).decode(),
+        "X-Forwarded-For": f"10.0.0.{i}"}).status_code for i in range(30)]
+    assert 429 in basic, "spoofed XFF bypassed the Basic throttle"
+    login = [c.post("/login", data={"username": "mallory", "password": f"w{i}"},
+                    follow_redirects=False,
+                    headers={"X-Forwarded-For": f"172.16.0.{i}"}).status_code
+             for i in range(20)]
+    assert 429 in login, "spoofed XFF bypassed the /login throttle"
+
+
+def test_revoked_but_cached_credential_is_still_throttled():
+    """A credential cached then invalidated (password change) costs a full
+    scrypt on every replay; the throttle must count those, not skip them
+    because the key is still present in the cache."""
+    app, _lib, users = _app()
+    c = TestClient(app, raise_server_exceptions=False)
+    hdr = {"Authorization": "Basic " + base64.b64encode(
+        b"mallory:mallory's long password").decode()}
+    assert c.get("/api/library", headers=hdr).status_code == 200   # caches
+    users.set_password("mallory", "a brand new long password")     # stale now
+    codes = [c.get("/api/library", headers=hdr).status_code for _ in range(40)]
+    assert all(x in (401, 429) for x in codes)
+    assert 429 in codes, "a revoked-but-cached header skipped the throttle"
+
+
+def test_non_finite_year_does_not_500():
+    """int(float('inf')) raises OverflowError, which the year guard missed."""
+    root = Path(tempfile.mkdtemp())
+    lib = server.Library(root)
+    import fitz
+    d = fitz.open(); d.new_page().insert_text((72, 72), "Readable text.")
+    (root / "f.pdf").write_bytes(d.tobytes()); d.close()
+    w = server.Worker(lib, "af_heart", 1.0, 150)
+    c = TestClient(server.create_app(lib, w, {}, None),
+                   raise_server_exceptions=False)          # single-user by-path
+    for y in ("1e999", "Infinity", "-Infinity"):
+        r = c.post("/api/papers/by-path",
+                   headers={"Content-Type": "application/json"},
+                   content='{"path":"' + str(root / "f.pdf") + '","year":' + y + '}')
+        assert r.status_code < 500, f"year {y} -> {r.status_code}"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

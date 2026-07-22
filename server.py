@@ -412,13 +412,23 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                 _attempts.clear()
             return len(hits) >= limit
 
+    trust_proxy = bool(auth_cfg.get("trust_proxy"))
+
     def _client_ip(request):
-        # behind the documented nginx, the socket peer is 127.0.0.1 for
-        # everyone, which would collapse all callers into one bucket. Prefer
-        # the forwarded client when the proxy sets it.
-        fwd = request.headers.get("x-forwarded-for", "")
-        if fwd:
-            return fwd.split(",")[0].strip()
+        # The socket peer is UNSPOOFABLE over an established connection; an
+        # X-Forwarded-For header is fully client-controlled. Default to the
+        # peer, so an attacker cannot land in a fresh throttle bucket per
+        # request by rotating XFF. Behind the documented nginx the peer is
+        # 127.0.0.1 for everyone (one shared bucket — safe, just conservative);
+        # set [auth] trust_proxy = true to read the client the proxy reports.
+        # Take the RIGHTMOST token: nginx's $remote_addr overwrites to a single
+        # value, and $proxy_add_x_forwarded_for appends the real peer last —
+        # either way the last hop is the one your proxy vouched for, and any
+        # value the client injected sits to its left, untrusted.
+        if trust_proxy:
+            fwd = request.headers.get("x-forwarded-for", "")
+            if fwd:
+                return fwd.split(",")[-1].strip()
         return request.client.host if request.client else "?"
 
     def _users_rev():
@@ -430,8 +440,11 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         import hashlib as _h
         key = _h.sha256(header.encode()).hexdigest()
         hit = _basic_ok.get(key)
-        if hit is not None and hit[1] == _users_rev():
-            return hit[0] or True
+        if hit is not None:
+            if hit[1] == _users_rev():
+                return hit[0] or True
+            with _auth_state_lock:
+                _basic_ok.pop(key, None)     # stale: don't let it linger
         try:
             import base64 as _b
             _user, _, pw = _b.b64decode(header[6:]).decode().partition(":")
@@ -448,9 +461,10 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                 else None))
         if who is None:
             return None
-        if len(_basic_ok) > 512:   # bounded in BOTH regimes: the single-user
-            _basic_ok.clear()      # branch is the one that is live today
-        _basic_ok[key] = (who or None, rev)
+        with _auth_state_lock:     # _basic_ok is touched from threadpool workers
+            if len(_basic_ok) > 512:   # bounded in both regimes; the single-
+                _basic_ok.clear()      # user branch is what is live today
+            _basic_ok[key] = (who or None, rev)
         return who or True
 
     @app.middleware("http")
@@ -488,8 +502,13 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             # Basic path is throttled too. A verified header (cache hit) is
             # cheap and must not be throttled, so only unknown headers count.
             import hashlib as _h
-            if _h.sha256(header.encode()).hexdigest() not in _basic_ok and \
-                    _throttled(f"basic:{_client_ip(request)}", limit=20):
+            hit = _basic_ok.get(_h.sha256(header.encode()).hexdigest())
+            # a currently-valid cache hit is cheap and must not be throttled;
+            # anything else (unknown OR stale-cached) will cost a scrypt, so
+            # gating on mere key-presence let a revoked-but-cached header skip
+            # the throttle and flood scrypt on every request
+            cheap = hit is not None and hit[1] == _users_rev()
+            if not cheap and _throttled(f"basic:{_client_ip(request)}", limit=20):
                 return JSONResponse({"detail": "too many attempts"},
                                     status_code=429)
         basic = await run_in_threadpool(_basic_valid, header)
@@ -830,8 +849,9 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         if body.get("year"):
             try:
                 fields["year"] = int(body["year"])
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass          # a junk year is dropped, not a 500 after ingest
+                              # (OverflowError: int(float('inf')) from year:1e999)
         if fields:
             fields["meta_locked"] = True
             lib.update(pid, **fields)

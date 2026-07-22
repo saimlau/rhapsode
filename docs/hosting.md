@@ -124,9 +124,7 @@ server {
         proxy_pass http://127.0.0.1:7717;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $remote_addr;   # the app throttles
-                                    # per client; without this every caller
-                                    # looks like 127.0.0.1 and shares one bucket
+        proxy_set_header X-Forwarded-For $remote_addr;   # see trust_proxy
         proxy_buffering off;        # progress is streamed; buffering stalls it
         proxy_read_timeout 3600s;   # a long paper holds the connection
     }
@@ -135,9 +133,12 @@ server {
 
 If you enable accounts, add rate limiting. Every failed credential costs a
 deliberate scrypt hash — at the login form, on the join page, and in the HTTP
-Basic header that machine clients send on ordinary requests. The app throttles
-all three itself (so a misconfigured proxy is not a hole), but nginx is the
-cheaper first line. Also stop logging invite tokens:
+Basic header that machine clients send on ordinary requests. The app throttles all three itself, keyed on the connection's source. Behind
+a proxy that source is the proxy, so set `[auth] trust_proxy = true` **and**
+the `X-Forwarded-For $remote_addr` line above together — the app then throttles
+per real client. Leave trust_proxy off and the header is ignored (unspoofable,
+but all users share one bucket). nginx `limit_req` is the cheaper first line
+regardless. Also stop logging invite tokens:
 
 ```nginx
 # in the http { } block
