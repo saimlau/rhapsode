@@ -102,8 +102,28 @@ main { max-width: 68rem; margin: 0 auto;
 
 /* ---------------------------------------------- B: the cover wall */
 .shelf-head { display: flex; align-items: baseline; justify-content: space-between;
-  gap: 1rem; margin-bottom: .9rem; }
+  gap: 1rem; margin-bottom: .7rem; }
 .shelf-head .count { font: .72rem var(--mono); color: var(--muted); }
+
+/* C's idea, folded in: when several papers are in progress, a compact row
+   under the hero — the hero is the one you're deepest into, this is the rest */
+.continue { margin: -1rem 0 2.4rem; }
+.continue h2 { margin: 0 0 .8rem; font: 600 .66rem var(--mono);
+  letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.crow { display: flex; gap: clamp(.9rem, 2vw, 1.2rem); overflow-x: auto;
+  padding-bottom: .5rem; scroll-snap-type: x proximity; }
+.crow .tile { flex: 0 0 auto; width: 116px; scroll-snap-align: start; }
+
+/* C's facets, folded in: filters on the ONE wall, not duplicated carousels */
+.chips { display: flex; gap: .5rem; flex-wrap: wrap; margin: 0 0 1.2rem; }
+.chip { font: 500 .74rem var(--sans); color: var(--muted); background: none;
+  border: 1px solid var(--hairline); border-radius: 999px; padding: .26rem .72rem;
+  cursor: pointer; display: inline-flex; gap: .4rem; align-items: baseline; }
+.chip:hover { color: var(--ink); }
+.chip .cn { font: .68rem var(--mono); color: var(--muted); }
+.chip.on { color: var(--ink); border-color: var(--marker);
+  box-shadow: inset 0 -1.4em 0 var(--marker-wash); }
+.chip.on .cn { color: var(--ink); }
 .wall { display: grid; gap: clamp(.9rem, 2.4vw, 1.4rem);
   grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
 .tile { position: relative; display: block; }
@@ -168,11 +188,17 @@ main { max-width: 68rem; margin: 0 auto;
 <main>
   <div id="top"><p class="lede">Reading the shelf…</p></div>
 
+  <section class="continue" id="continue" hidden>
+    <h2>Also in progress</h2>
+    <div class="crow" id="crow"></div>
+  </section>
+
   <section id="shelfSection" hidden>
     <div class="shelf-head">
       <p class="eyebrow" style="margin:0">The shelf</p>
       <span class="count" id="shelfCount"></span>
     </div>
+    <div class="chips" id="chips"></div>
     <div class="wall" id="wall"></div>
   </section>
 
@@ -246,30 +272,74 @@ function startFresh(d) {
     : `<p class="lede">The shelf is empty. <a href="/">Drop a PDF</a> to begin.</p>`;
 }
 
+function tileHTML(p) {
+  const pct = Math.round(frac(p) * 100);
+  return `<a class="tile" href="${view(p.id)}" data-id="${esc(p.id)}">
+    <div class="frame">
+      <img src="${cover(p.id)}" alt="" loading="lazy"
+           onerror="this.style.visibility='hidden'">
+      ${pct ? `<span class="prog" style="width:${pct}%"></span>` : ""}
+      <div class="peek"><span></span></div>
+    </div>
+    <div class="cap">
+      <div class="t">${esc(p.title)}</div>
+      <div class="c">${pct ? `<span class="n">${pct}%</span> · ` : ""}${esc(cite(p) || clock(p.duration))}</div>
+    </div>
+  </a>`;
+}
+// wire the lazy opening-line peek on a container of tiles
+function wirePeek(root) {
+  root.querySelectorAll(".tile").forEach(t => {
+    const go = () => peek(t.dataset.id, t.querySelector(".peek span"));
+    t.addEventListener("pointerenter", go, { once: true });
+    t.addEventListener("focus", go, { once: true });
+  });
+}
+
+const inProgress = p => frac(p) > 0.02 && frac(p) < 0.98;
+// C's facets, as filters on the one wall
+const FILTERS = [
+  { key: "all",   label: "All",   fn: s => s, whole: true },
+  { key: "prog",  label: "In progress", fn: s => s.filter(inProgress) },
+  { key: "short", label: "Short",
+    fn: s => s.filter(p => (p.duration || 0) > 0 && p.duration < 1200)
+              .sort((a, b) => a.duration - b.duration) },
+  { key: "long",  label: "Long",
+    fn: s => s.filter(p => (p.duration || 0) >= 3000)
+              .sort((a, b) => b.duration - a.duration) },
+  { key: "year",  label: "By year", whole: true,
+    fn: s => [...s].sort((a, b) => (b.year || 0) - (a.year || 0)) },
+];
+let activeFilter = "all";
+const filtered = shelf =>
+  (FILTERS.find(f => f.key === activeFilter) || FILTERS[0]).fn(shelf);
+
+function chips(shelf) {
+  $("#chips").innerHTML = FILTERS.map(f => {
+    const n = f.fn(shelf).length;
+    const badge = f.whole ? "" : `<span class="cn">${n}</span>`;
+    return n ? `<button class="chip${f.key === activeFilter ? " on" : ""}"
+      data-k="${f.key}">${f.label}${badge}</button>` : "";
+  }).join("");
+  $("#chips").querySelectorAll(".chip").forEach(c =>
+    c.addEventListener("click", () => {
+      activeFilter = c.dataset.k; chips(shelf); wall(shelf);
+    }));
+}
+
 function wall(shelf) {
   $("#shelfCount").textContent =
     `${shelf.length} paper${shelf.length === 1 ? "" : "s"}`;
-  $("#wall").innerHTML = shelf.map(p => {
-    const pct = Math.round(frac(p) * 100);
-    return `<a class="tile" href="${view(p.id)}" data-id="${esc(p.id)}">
-      <div class="frame">
-        <img src="${cover(p.id)}" alt="" loading="lazy"
-             onerror="this.style.visibility='hidden'">
-        ${pct ? `<span class="prog" style="width:${pct}%"></span>` : ""}
-        <div class="peek"><span></span></div>
-      </div>
-      <div class="cap">
-        <div class="t">${esc(p.title)}</div>
-        <div class="c">${pct ? `<span class="n">${pct}%</span> · ` : ""}${esc(cite(p) || clock(p.duration))}</div>
-      </div>
-    </a>`;
-  }).join("");
-  // lazy opening-line peek on first hover of each tile
-  $("#wall").querySelectorAll(".tile").forEach(t => {
-    const load = () => peek(t.dataset.id, t.querySelector(".peek span"));
-    t.addEventListener("pointerenter", load, { once: true });
-    t.addEventListener("focus", load, { once: true });
-  });
+  const items = filtered(shelf);
+  $("#wall").innerHTML = items.map(tileHTML).join("");
+  wirePeek($("#wall"));
+}
+
+function continueRow(items) {
+  $("#continue").hidden = items.length < 1;
+  if (!items.length) return;
+  $("#crow").innerHTML = items.map(tileHTML).join("");
+  wirePeek($("#crow"));
 }
 
 function strip(d) {
@@ -287,9 +357,12 @@ function strip(d) {
 
 function render(d) {
   if (d.me && d.me.admin) $("#peopleLink").hidden = false;
-  if (d.resume && d.resume.length) hero(d.resume[0]); else startFresh(d);
+  const prog = (d.resume || []);
+  if (prog.length) hero(prog[0]); else startFresh(d);
+  // the hero is the paper you are deepest into; the row is the rest in progress
+  continueRow(prog.slice(1));
   $("#shelfSection").hidden = !(d.shelf && d.shelf.length);
-  if (d.shelf && d.shelf.length) wall(d.shelf);
+  if (d.shelf && d.shelf.length) { chips(d.shelf); wall(d.shelf); }
   strip(d);
   // sweep the progress line to position after paint
   const g = d.resume && d.resume[0];
