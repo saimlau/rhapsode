@@ -45,6 +45,10 @@ li + li { border-top: 1px solid var(--hairline); }
        color: var(--marker); border: 1px solid var(--marker); border-radius: 3px;
        padding: 0 .35rem; }
 .n { font: .72rem var(--mono); color: var(--muted); white-space: nowrap; }
+.capbar { width: 64px; height: 5px; border-radius: 3px; background: var(--hairline);
+          overflow: hidden; flex: none; }
+.capbar i { display: block; height: 100%; background: var(--marker); }
+.capbar.over i { background: var(--error); }
 button.act { font: .72rem var(--mono); color: var(--muted); background: none;
              border: 1px solid var(--hairline); border-radius: 5px;
              padding: .2rem .5rem; cursor: pointer; }
@@ -139,6 +143,7 @@ async function load() {
       <span class="n">${u.hours} h total · ${u.operator_hours} h on shared${
         cap != null ? ` / ${cap} h` : ""}</span>
       ${over ? '<span class="tag" style="color:var(--error)">over cap</span>' : ""}
+      ${cap != null ? `<span class="capbar${over ? " over" : ""}"><i style="width:${pct}%"></i></span>` : ""}
       <button class="act" data-cap="${esc(u.name)}"
         data-cur="${cap == null ? "" : cap}">${cap == null ? "Set cap" : "Change"}</button>
       </li>`;
@@ -148,7 +153,7 @@ async function load() {
   $("#health").innerHTML = `
     <li><span class="n">${h.queued || 0} queued · ${h.generating || 0} generating`
     + `${h.free_gb != null ? ` · ${h.free_gb} GB free` : ""}`
-    + `${h.needs_attention ? ` · <b style="color:var(--error)">${h.needs_attention} need attention</b>` : ""}`
+    + `${h.needs_attention ? ` · <b style="color:var(--error)">${h.needs_attention} need${h.needs_attention === 1 ? "s" : ""} attention</b>` : ""}`
     + `</span></li>`;
 }
 
