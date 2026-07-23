@@ -167,6 +167,24 @@ class Library:
         return self.root / pid / "readalong"
 
 
+# --- metered resources: paid backends the operator fronts. A resource's
+# per-user usage is what quota gating and the admin dashboard read. v1 has
+# one; a shared Anthropic/OpenAI/Gemini key later registers as another.
+METERS = {"tts_hours": {"label": "audio hours", "unit": "h"}}
+
+
+def operator_tts_hours(lib, who):
+    """Audio hours of `who`'s ready papers synthesised on the OPERATOR's Modal
+    account (billed absent = operator). Derived from the library, so deleting a
+    paper drops the usage — no separate ledger to fall out of sync."""
+    total = 0.0
+    for p in lib.snapshot()["papers"].values():
+        if (p.get("status") == "ready" and p.get("owner") == who
+                and p.get("billed", "operator") == "operator"):
+            total += p.get("duration") or 0
+    return round(total / 3600, 4)
+
+
 class Worker(threading.Thread):
     """Single generation thread — the GPU is serial; the model stays warm
     during a batch and is parked/unloaded (with GROBID stopped) when the
