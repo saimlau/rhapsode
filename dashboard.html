@@ -169,6 +169,9 @@ main { max-width: 68rem; margin: 0 auto;
 .fpapers .tile.dragging { opacity: .4; }
 .fhint { font: .74rem var(--mono); color: var(--muted); margin: 0 0 .9rem; }
 #folders[hidden] { display: none; }
+/* .wall sets display:grid, which beats the UA [hidden] rule, so the
+   grid stayed visible under the folder view — restore it explicitly */
+.wall[hidden] { display: none; }
 #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
   background: var(--ink); color: var(--desk); padding: .55rem 1rem;
   border-radius: 8px; font: .82rem var(--sans); opacity: 0; pointer-events: none;
