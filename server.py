@@ -26,6 +26,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
 from starlette.concurrency import run_in_threadpool
 
 import auth
+import secretbox
 import rhapsode as p2a
 from extraction import clean_text, extract_segments
 
@@ -185,18 +186,34 @@ def operator_tts_hours(lib, who):
     return round(total / 3600, 4)
 
 
+def decrypt_profile(users, who, key):
+    """The owner's decrypted Modal profile, or None (no key, none attached, or
+    a blob that won't decrypt — treat all three as 'run on the operator')."""
+    if not (users and who and key):
+        return None
+    blob = users.get_modal_enc(who)
+    if not blob:
+        return None
+    try:
+        return json.loads(secretbox.decrypt(blob, key, who.encode()))
+    except Exception:
+        return None      # never surface the reason; fall back quietly
+
+
 class Worker(threading.Thread):
     """Single generation thread — the GPU is serial; the model stays warm
     during a batch and is parked/unloaded (with GROBID stopped) when the
     queue has been idle, so nothing heavy stays resident between bursts."""
 
     def __init__(self, lib, voice, speed, dpi, grobid_cfg=None, tts_cfg=None,
-                 idle_exit_min=0, llm_cfg=None):
+                 idle_exit_min=0, llm_cfg=None, users=None, secret_key=None):
         super().__init__(daemon=True)
         self.lib, self.voice, self.speed, self.dpi = lib, voice, speed, dpi
         self.grobid_cfg = grobid_cfg
         self.tts_cfg = tts_cfg or {}
         self.llm_cfg = llm_cfg
+        self.users = users
+        self.secret_key = secret_key
         self.idle_exit_min = idle_exit_min or 0
         self.last_activity = time.time()
         self.q = queue.Queue()
@@ -240,6 +257,24 @@ class Worker(threading.Thread):
         _, fut = self._prefetch
         self._prefetch = None
         return fut.result()
+
+    def _resolve_creds(self, owner):
+        """(tts_cfg, llm_cfg, billed) for this paper's owner: their own Modal
+        if attached (bills them), else the operator's shared endpoint."""
+        prof = decrypt_profile(self.users, owner, self.secret_key)
+        tts, llm, billed = self.tts_cfg, self.llm_cfg, "operator"
+        if prof and prof.get("tts"):
+            t = prof["tts"]
+            tts = {**self.tts_cfg, "backend": "modal",
+                   "modal_endpoint": t["endpoint"],
+                   "modal_token_id": t["token_id"],
+                   "modal_token_secret": t["token_secret"]}
+            billed = "self"
+        if prof and prof.get("llm"):
+            l = prof["llm"]
+            llm = {**(self.llm_cfg or {}), "enabled": True,
+                   "api_base_url": l["api_base_url"], "api_key": l["api_key"]}
+        return tts, llm, billed
 
     def _idle_tick(self):
         p2a.maybe_idle_models(self.tts_cfg.get("park_after_s", 300),
@@ -300,25 +335,34 @@ class Worker(threading.Thread):
                     self.lib.update(pid, persist=False,
                                     progress=round(frac, 3), stage=label)
 
+            # resolve creds once per job by the paper's OWNER: their own Modal
+            # profile (bills them, billed="self") if attached, else the
+            # operator's shared endpoint (billed="operator")
+            with self.lib.lock:
+                owner = self.lib.data["papers"][pid].get("owner")
+            tts_cfg, llm_cfg, billed = self._resolve_creds(owner)
+
             try:
                 prepared = self._take_prefetch(pid)
                 if prepared is None:
                     progress(0.0, "extracting text")
                     prepared = p2a.prepare_units(self.lib.pdf_path(pid),
-                                                 self.grobid_cfg, self.llm_cfg)
+                                                 self.grobid_cfg, llm_cfg)
                 else:
                     # extraction already happened in the background; say so
                     # rather than showing a blank stage until the first unit
                     progress(0.0, "starting narration")
                 # extraction for the NEXT paper runs while this one narrates,
-                # so neither remote container idles into a cold start
+                # so neither remote container idles into a cold start. The
+                # prefetch deliberately uses the operator self.llm_cfg — a v1
+                # simplification, since LLM tokens are not metered this phase.
                 self._start_prefetch()
                 info = p2a.generate_readalong(
                     self.lib.pdf_path(pid), self.lib.view_dir(pid),
                     self.voice, self.speed, self.dpi, progress,
-                    grobid_cfg=self.grobid_cfg, tts_cfg=self.tts_cfg,
-                    llm_cfg=self.llm_cfg, prepared=prepared)
-                fields = dict(status="ready", progress=1.0,
+                    grobid_cfg=self.grobid_cfg, tts_cfg=tts_cfg,
+                    llm_cfg=llm_cfg, prepared=prepared)
+                fields = dict(status="ready", progress=1.0, billed=billed,
                               duration=round(info["duration"], 1),
                               warnings=info["warnings"])
                 with self.lib.lock:
