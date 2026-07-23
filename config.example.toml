@@ -84,6 +84,14 @@ cache = true
 # Setting this implies an OpenAI-compatible provider.
 # api_base_url = "https://<you>--rhapsode-llm-serve.modal.run/v1"
 
+# [secrets]
+# AES-256-GCM key (base64 of 32 bytes) that encrypts each user's own Modal
+# credentials at rest. Generate one with:  rhapsode --gen-key
+# Keep it OUT of the library directory and back it up separately — without it,
+# users' attached Modal profiles can't be decrypted. Leave unset to keep
+# per-user Modal off (all synthesis runs on the operator's account).
+# key = ""
+
 [gui]
 # Port for `rhapsode --gui` (auto-probes upward if busy).
 port = 7717

@@ -761,7 +761,7 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         if not multiuser or not who or not users.is_admin(who):
             raise HTTPException(403, "admins only")
         papers = lib.snapshot()["papers"]
-        counts, hours, op_hours = {}, {}, {}
+        counts, hours = {}, {}
         for p in papers.values():
             o = p.get("owner")
             counts[o] = counts.get(o, 0) + 1

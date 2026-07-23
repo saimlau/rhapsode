@@ -271,12 +271,17 @@ so, per-user Modal is unavailable, and everything runs on the operator account
 exactly as before. Restart after adding the key.
 
 **Users attach their own Modal at `/settings`.** A signed-in colleague opens the
-library footer's Settings link and fills in their own TTS (and optionally LLM)
-endpoint and token. A **Test** button runs one tiny synth against *their* own
+library footer's Settings link and fills in their own TTS endpoint and token. A
+**Test** button runs one tiny synth against *their* own
 endpoint to confirm it works — the only thing that ever pings Modal on a click,
 and only their container, their cost. From then on their papers bill to them and
 are never counted against any cap. Tokens are write-only: the page shows only
 that a profile is attached and the last four characters, never the secret.
+
+In this version the settings page manages the TTS (narration) Modal endpoint
+only; per-user LLM (extraction) self-hosting is planned for a later phase. The
+backend already routes a user's own LLM profile when one is present — there is
+just no UI to set one yet.
 
 **You set per-user audio-hour caps on the People page** (`/admin`). Each account
 shows papers, audio-hours, whether they self-host, and their operator-hours as

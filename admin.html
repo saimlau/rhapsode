@@ -181,7 +181,13 @@ document.addEventListener("click", async e => {
     const val = prompt(`Shared-compute cap for ${cap}, in audio hours `
                        + `(blank = unlimited):`, cur);
     if (val === null) return;
-    const quota = { tts_hours: val.trim() === "" ? null : Number(val) };
+    const trimmed = val.trim();
+    let capVal = null;
+    if (trimmed !== "") {
+      capVal = Number(trimmed);
+      if (!Number.isFinite(capVal)) { alert("Enter a number of audio hours, or leave blank for unlimited."); return; }
+    }
+    const quota = { tts_hours: capVal };
     await fetch(`/api/users/${encodeURIComponent(cap)}`, { method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ quota }) });
