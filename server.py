@@ -827,6 +827,29 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         users.clear_modal_enc(who)
         return {"ok": True}
 
+    @app.post("/api/account/modal/test")
+    def test_account_modal(request: Request):
+        who = _me(request)
+        prof = decrypt_profile(users, who, secret_key) or {}
+        tts = prof.get("tts")
+        if not tts:
+            raise HTTPException(400, "no Modal TTS endpoint attached")
+        cfg = {"backend": "modal", "modal_endpoint": tts["endpoint"],
+               "modal_token_id": tts["token_id"],
+               "modal_token_secret": tts["token_secret"]}
+        # one tiny synth against the caller's OWN endpoint — the only place the
+        # server contacts Modal, and only on an explicit click by the payer
+        unit = {"text": "test.", "kind": "body"}
+        try:
+            for _ in p2a._modal_unit_audio([unit], "af_heart", 1.0, cfg):
+                break
+            return {"ok": True}
+        except Exception:
+            # never surface the exception text: it can contain the endpoint/token
+            return {"ok": False,
+                    "error": "Could not reach your Modal endpoint. Check the "
+                             "URL and token pair in your settings."}
+
     @app.delete("/api/invites/{key}")
     def revoke_invite(key: str, request: Request):
         who = caller(request)
