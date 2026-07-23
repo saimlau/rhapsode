@@ -37,8 +37,11 @@ def test_upload_with_metadata_and_playlist():
     assert entry["year"] == 2024
     assert entry["meta_locked"] is True
     plid = body["playlist"]
-    assert lib.data["playlists"][plid]["name"] == "Lab / Shelf"
-    assert pid in lib.data["playlists"][plid]["order"]
+    # "Lab / Shelf" resolves into the folder tree: leaf "Shelf" under "Lab"
+    leaf = lib.data["playlists"][plid]
+    assert leaf["name"] == "Shelf"
+    assert lib.data["playlists"][leaf["parent"]]["name"] == "Lab"
+    assert pid in leaf["order"]
 
 
 def test_upload_without_metadata_unchanged():

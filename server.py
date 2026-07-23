@@ -118,18 +118,46 @@ class Library:
             else:
                 self.touch(bump)
 
-    def playlist_by_name(self, name, owner=None):
-        """Find-or-create a playlist; the slug id makes repeats idempotent.
-        The slug is namespaced per owner, or two users who both create
-        "Reading" would silently share one playlist."""
+    def _new_plid(self, name, owner, parent):
+        base = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "pl"
+        if owner:
+            base = f"{owner}--{base}"
+        plid = base
+        while plid in self.data["playlists"]:      # two "Corrosion" folders
+            plid = f"{base}-{secrets.token_hex(2)}"  # under different parents
+        self.data["playlists"][plid] = {"name": name, "order": [],
+                                        "owner": owner, "parent": parent}
+        return plid
+
+    def resolve_folder(self, segments, owner=None):
+        """Ensure a folder path exists and return the LEAF plid, creating any
+        missing ancestor folders. The ONLY place the tree is built: migration,
+        the Zotero plugin's "A / B" names, and the New-folder UI all route
+        through here, so the "/" convention and the parent field never drift."""
         with self.lock:
-            plid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "pl"
-            if owner:
-                plid = f"{owner}--{plid}"
-            if plid not in self.data["playlists"]:
-                self.data["playlists"][plid] = {"name": name, "order": [],
-                                                "owner": owner}
+            parent = None
+            leaf = None
+            for seg in [s.strip() for s in segments if s.strip()]:
+                match = next(
+                    (pid for pid, pl in self.data["playlists"].items()
+                     if pl.get("parent") == parent and pl.get("name") == seg
+                     and pl.get("owner") == owner), None)
+                leaf = match or self._new_plid(seg, owner, parent)
+                parent = leaf
+            if leaf is not None:
                 self.save()
+            return leaf
+
+    def playlist_by_name(self, name, owner=None):
+        """Find-or-create by a possibly-slashed path name; returns the leaf
+        plid. 'Osteo Lab / Sheep Model' resolves into the real tree."""
+        return self.resolve_folder(str(name).split("/"), owner)
+
+    def create_folder(self, name, owner=None, parent=None):
+        """A single new folder (leaf) under an explicit parent plid."""
+        with self.lock:
+            plid = self._new_plid(name, owner, parent)
+            self.save()
             return plid
 
     def pdf_path(self, pid):
@@ -741,11 +769,14 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         # playlists as grid-scoping groups: their ready members, in order,
         # already filtered to what this caller may see by _scoped()
         ready_ids = {r["id"] for r in shelf}
+        # every visible folder (already ownership-scoped by _scoped), INCLUDING
+        # empty ones — they are the tree's container nodes — with members
+        # filtered to what has a cover to show
         playlists = [
             {"id": plid, "name": pl.get("name") or plid,
+             "parent": pl.get("parent"),
              "order": [pid for pid in pl.get("order", []) if pid in ready_ids]}
             for plid, pl in (snap.get("playlists") or {}).items()]
-        playlists = [pl for pl in playlists if pl["order"]]
         failed = [{"id": pid, "title": p.get("title"), "error": p.get("error")}
                   for pid, p in papers.items() if p.get("status") == "error"]
         try:
@@ -899,10 +930,20 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         if fields:
             fields["meta_locked"] = True
             lib.update(pid, **fields)
+        target = str(body.get("playlist_id", "")).strip()
         name = str(body.get("playlist", "")).strip()
-        if not name:
+        if target:
+            pl = lib.data["playlists"].get(target)
+            # only a folder the caller owns; a bad id just files nothing
+            if not pl or (multiuser and who is not None
+                          and pl.get("owner") not in (None, who)
+                          and not (users and users.is_admin(who))):
+                return None
+            plid = target
+        elif name:
+            plid = lib.playlist_by_name(name, owner=who)
+        else:
             return None
-        plid = lib.playlist_by_name(name, owner=who)
         with lib.lock:
             order = lib.data["playlists"][plid]["order"]
             if pid not in order:
@@ -913,12 +954,13 @@ def create_app(lib, worker, auth_cfg=None, users=None):
     @app.post("/api/papers")
     def add_paper(request: Request, file: UploadFile, title: str = Form(""),
                   authors: str = Form(""), year: str = Form(""),
-                  playlist: str = Form("")):
+                  playlist: str = Form(""), playlist_id: str = Form("")):
         resp = _ingest(file.filename, file.file.read(MAX_UPLOAD + 1),
                        caller(request))
         pid = json.loads(resp.body)["id"]
         plid = _apply_meta(pid, {"title": title, "authors": authors,
-                                 "year": year, "playlist": playlist},
+                                 "year": year, "playlist": playlist,
+                                 "playlist_id": playlist_id},
                            caller(request))
         if plid:
             return JSONResponse({**json.loads(resp.body), "playlist": plid})
@@ -970,7 +1012,14 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         name = str(body.get("name", "")).strip()
         if not name:
             raise HTTPException(400, "playlist name required")
-        return {"id": lib.playlist_by_name(name, owner=caller(request))}
+        if "/" in name:
+            raise HTTPException(400, "a folder name cannot contain '/'")
+        who = caller(request)
+        parent = body.get("parent")
+        if parent:
+            own_playlist(parent, request)      # a subfolder under an owned one
+            return {"id": lib.create_folder(name, owner=who, parent=parent)}
+        return {"id": lib.create_folder(name, owner=who, parent=None)}
 
     @app.put("/api/playlists/{plid}")
     def update_playlist(plid: str, request: Request, body: dict):
@@ -1280,6 +1329,36 @@ def _free_port(start):
     raise RuntimeError(f"no free port in {start}..{start + 9}")
 
 
+def _migrate_playlist_tree(lib):
+    """One-time: turn slashed playlist names ("A / B / C") into a real parent
+    tree, in place, keeping each playlist's own id and members. Idempotent
+    (guarded by a flag), lossless, and shared with resolve_folder so the
+    convention and the field can never diverge."""
+    with lib.lock:
+        if lib.data.get("playlist_tree_migrated"):
+            return
+        pls = lib.data.get("playlists") or {}
+        changed = 0
+        # shallowest paths first, so an ancestor is normalised before its child
+        for plid, pl in sorted(pls.items(),
+                               key=lambda kv: (kv[1].get("name") or "").count("/")):
+            pl.setdefault("parent", None)
+            segs = [x.strip() for x in (pl.get("name") or plid).split("/")
+                    if x.strip()]
+            if len(segs) <= 1:
+                pl["name"] = segs[0] if segs else (pl.get("name") or plid)
+                pl["parent"] = None
+                continue
+            pl["parent"] = lib.resolve_folder(segs[:-1], pl.get("owner"))
+            pl["name"] = segs[-1]
+            changed += 1
+        lib.data["playlist_tree_migrated"] = True
+        lib.save()
+        if changed:
+            print(f"  [playlists] arranged {changed} slashed name(s) into a "
+                  f"folder tree", flush=True)
+
+
 def _bootstrap_users(lib, auth_cfg):
     """Turn a single-password install into a named-account one, once.
 
@@ -1335,6 +1414,7 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     root.mkdir(parents=True, exist_ok=True)
 
     lib = Library(root)
+    _migrate_playlist_tree(lib)
     users = _bootstrap_users(lib, auth_cfg or {})
     worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg, idle_exit_min,
                     llm_cfg)

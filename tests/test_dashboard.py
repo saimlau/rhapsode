@@ -107,14 +107,20 @@ def test_dashboard_playlists_list_only_ready_members():
         "a pending member has no cover and must be dropped, order preserved"
 
 
-def test_empty_playlist_is_not_surfaced():
+def test_empty_folder_is_surfaced_as_a_tree_node():
+    """Empty folders are containers in the tree, so unlike leaf-with-no-ready-
+    members they must still appear (the folder browser needs them)."""
     root = Path(tempfile.mkdtemp())
     lib = server.Library(root)
     worker = server.Worker(lib, "af_heart", 1.0, 150)
-    lib.data["playlists"]["empty"] = {"name": "Empty", "order": []}
+    lib.data["playlists"]["empty"] = {"name": "Empty", "order": [], "parent": None}
     lib.save()
-    c = TestClient(server.create_app(lib, worker, {}, None))
-    assert c.get("/api/dashboard").json()["playlists"] == []
+    pls = c_get_playlists(server.create_app(lib, worker, {}, None))
+    assert [p["name"] for p in pls] == ["Empty"]
+
+
+def c_get_playlists(app):
+    return TestClient(app).get("/api/dashboard").json()["playlists"]
 
 
 if __name__ == "__main__":
