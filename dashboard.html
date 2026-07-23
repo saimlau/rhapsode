@@ -124,6 +124,12 @@ main { max-width: 68rem; margin: 0 auto;
 .chip.on { color: var(--ink); border-color: var(--marker);
   box-shadow: inset 0 -1.4em 0 var(--marker-wash); }
 .chip.on .cn { color: var(--ink); }
+/* your playlists, as grid-scoping groups after a toolbar divider */
+.chip-div { width: 1px; align-self: stretch; min-height: 1.4rem;
+  background: var(--hairline); margin: 0 .35rem; }
+.chip.pl::before { content: "\2632"; margin-right: .4rem; color: var(--muted);
+  font-size: .85em; }
+.chip.pl.on::before { color: var(--ink); }
 .wall { display: grid; gap: clamp(.9rem, 2.4vw, 1.4rem);
   grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
 .tile { position: relative; display: block; }
@@ -313,16 +319,32 @@ const FILTERS = [
     fn: s => [...s].sort((a, b) => (b.year || 0) - (a.year || 0)) },
 ];
 let activeFilter = "all";
-const filtered = shelf =>
-  (FILTERS.find(f => f.key === activeFilter) || FILTERS[0]).fn(shelf);
+let PLAYLISTS = [];
+
+function filtered(shelf) {
+  if (activeFilter.startsWith("pl:")) {
+    const pl = PLAYLISTS.find(p => "pl:" + p.id === activeFilter);
+    if (!pl) return shelf;
+    const byId = Object.fromEntries(shelf.map(c => [c.id, c]));
+    return pl.order.map(id => byId[id]).filter(Boolean);   // playlist order
+  }
+  return (FILTERS.find(f => f.key === activeFilter) || FILTERS[0]).fn(shelf);
+}
 
 function chips(shelf) {
-  $("#chips").innerHTML = FILTERS.map(f => {
+  const facets = FILTERS.map(f => {
     const n = f.fn(shelf).length;
     const badge = f.whole ? "" : `<span class="cn">${n}</span>`;
     return n ? `<button class="chip${f.key === activeFilter ? " on" : ""}"
       data-k="${f.key}">${f.label}${badge}</button>` : "";
   }).join("");
+  const lists = PLAYLISTS.length
+    ? `<span class="chip-div"></span>` + PLAYLISTS.map(pl =>
+        `<button class="chip pl${"pl:" + pl.id === activeFilter ? " on" : ""}"
+          data-k="pl:${esc(pl.id)}">${esc(pl.name)}<span class="cn">${pl.order.length}</span></button>`
+      ).join("")
+    : "";
+  $("#chips").innerHTML = facets + lists;
   $("#chips").querySelectorAll(".chip").forEach(c =>
     c.addEventListener("click", () => {
       activeFilter = c.dataset.k; chips(shelf); wall(shelf);
@@ -363,6 +385,7 @@ function render(d) {
   if (prog.length) hero(prog[0]); else startFresh(d);
   // the hero is the paper you are deepest into; the row is the rest in progress
   continueRow(prog.slice(1));
+  PLAYLISTS = d.playlists || [];
   $("#shelfSection").hidden = !(d.shelf && d.shelf.length);
   if (d.shelf && d.shelf.length) { chips(d.shelf); wall(d.shelf); }
   strip(d);

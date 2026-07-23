@@ -78,6 +78,45 @@ def test_only_opening_the_reader_stamps_it():
         "a non-index asset fetch must not reorder the shelf"
 
 
+
+def test_dashboard_playlists_list_only_ready_members():
+    """The wall's playlist chips should scope to a playlist's papers that are
+    actually on the shelf — a pending or errored member has no cover to show."""
+    root = Path(tempfile.mkdtemp())
+    lib = server.Library(root)
+    worker = server.Worker(lib, "af_heart", 1.0, 150)
+
+    def paper(pid, status):
+        (root / pid / "readalong").mkdir(parents=True)
+        (root / pid / "readalong" / "index.html").write_text("x")
+        lib.data["papers"][pid] = {"id": pid, "status": status, "title": pid,
+                                   "authors": None, "year": None, "resume_t": 0,
+                                   "duration": 100, "added": 1.0}
+        lib.data["order"].append(pid)
+
+    paper("ready1", "ready")
+    paper("ready2", "ready")
+    paper("pending1", "pending")
+    lib.data["playlists"]["reading"] = {
+        "name": "Reading", "order": ["ready1", "pending1", "ready2"]}
+    lib.save()
+    c = TestClient(server.create_app(lib, worker, {}, None))
+    pls = c.get("/api/dashboard").json()["playlists"]
+    assert len(pls) == 1 and pls[0]["name"] == "Reading"
+    assert pls[0]["order"] == ["ready1", "ready2"], \
+        "a pending member has no cover and must be dropped, order preserved"
+
+
+def test_empty_playlist_is_not_surfaced():
+    root = Path(tempfile.mkdtemp())
+    lib = server.Library(root)
+    worker = server.Worker(lib, "af_heart", 1.0, 150)
+    lib.data["playlists"]["empty"] = {"name": "Empty", "order": []}
+    lib.save()
+    c = TestClient(server.create_app(lib, worker, {}, None))
+    assert c.get("/api/dashboard").json()["playlists"] == []
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

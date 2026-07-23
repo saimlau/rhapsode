@@ -738,6 +738,14 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             papers.items(), key=lambda kv: -(kv[1].get("added") or 0))
             if p.get("status") == "ready"]
         recent = [{"id": r["id"], "title": r["title"]} for r in shelf[:5]]
+        # playlists as grid-scoping groups: their ready members, in order,
+        # already filtered to what this caller may see by _scoped()
+        ready_ids = {r["id"] for r in shelf}
+        playlists = [
+            {"id": plid, "name": pl.get("name") or plid,
+             "order": [pid for pid in pl.get("order", []) if pid in ready_ids]}
+            for plid, pl in (snap.get("playlists") or {}).items()]
+        playlists = [pl for pl in playlists if pl["order"]]
         failed = [{"id": pid, "title": p.get("title"), "error": p.get("error")}
                   for pid, p in papers.items() if p.get("status") == "error"]
         try:
@@ -751,7 +759,8 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             "stats": {"papers": len(papers), "hours": round(hours / 3600, 1),
                       "by_status": by_status},
             "generating": generating, "queued": by_status.get("pending", 0),
-            "resume": resume, "shelf": shelf, "recent": recent,
+            "resume": resume, "shelf": shelf, "playlists": playlists,
+            "recent": recent,
             "failed": failed,
             # deliberately NOT pinged: a health check would wake a GPU
             # container and bill for it. Report what is configured.
