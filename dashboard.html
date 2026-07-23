@@ -72,6 +72,9 @@ main { max-width: 68rem; margin: 0 auto;
 .hero h1 {
   margin: .35rem 0 .4rem; font: 500 clamp(1.4rem, 3.4vw, 2.15rem)/1.22 var(--serif);
   letter-spacing: -.01em; }
+.hero .plline { font: .72rem var(--mono); color: var(--muted); letter-spacing: .04em;
+  margin: 0 0 .35rem; }
+.hero .plline b { color: var(--marker); font-weight: 600; }
 .hero .cite { font: .8rem var(--mono); color: var(--muted); margin: 0 0 .9rem; }
 .hero .peek { font: italic 1.02rem/1.55 var(--serif); color: var(--muted);
   margin: 0 0 1.1rem; max-width: 52ch;
@@ -175,9 +178,10 @@ main { max-width: 68rem; margin: 0 auto;
 .newf:hover { color: var(--ink); border-color: var(--marker); }
 .fpapers .tile { cursor: grab; }
 .fpapers .tile.dragging { opacity: .4; }
-.fpapers .tile.sel .frame { outline: 2px solid var(--marker); outline-offset: 2px; }
+.tile.sel .frame { outline: 2px solid var(--marker); outline-offset: 2px; }
 .fpapers .tile.cut .frame { opacity: .45; }
 .folder[draggable="true"] { cursor: grab; }
+.folder.sel .box { outline: 2px solid var(--marker); outline-offset: 2px; }
 /* the Ungrouped virtual folder: a lighter, dashed tab so it reads as "loose" */
 .folder.ung .box { background: none; border-style: dashed; }
 .folder.ung .box::before { background: var(--desk); border-style: dashed; }
@@ -331,29 +335,63 @@ async function peek(id, el) {
   el.textContent = peeks[id];
 }
 
+// a paper opened from a folder resumes IN that folder (so auto-advance follows
+// its order); flat otherwise
+const openHref = it => it.playlist_id
+  ? view(it.id) + "&pl=" + encodeURIComponent(it.playlist_id) : view(it.id);
+
+function historyMenu(it) {
+  return [
+    { label: "Resume", onClick: () => { location.href = openHref(it); } },
+    it.playlist_id ? { label: "Open playlist", onClick: () => {
+      viewMode = "folders"; currentFolder = it.playlist_id; showView();
+      $("#shelfSection").scrollIntoView({ behavior: "smooth", block: "start" });
+    } } : null,
+    { sep: true },
+    { label: "Remove from history", onClick: () => forget(it.anchor_id || it.id) },
+  ];
+}
+async function forget(pid) {
+  try { await fetch(`/api/papers/${encodeURIComponent(pid)}/forget`, { method: "POST" }); }
+  catch { toast("Could not update history"); }
+  await reload();
+}
+
 function hero(p) {
-  const pct = Math.round(frac(p) * 100);
+  const inPl = !!p.playlist_id;
+  const paperPct = Math.round(frac(p) * 100);
+  const barPct = Math.round((inPl ? (p.listened_frac || 0) : frac(p)) * 100);
   const left = Math.max(0, (p.duration || 0) - (p.at || 0));
-  const top = $("#top");
-  top.innerHTML = `
+  const href = openHref(p);
+  const plLine = inPl
+    ? `<p class="plline">${esc(p.playlist_path)} \u00b7 <b>${p.pos}</b> of ${p.count}</p>` : "";
+  const meta = inPl
+    ? `<span class="left"><b>${barPct}%</b> through the folder \u00b7 next at ${paperPct}%</span>`
+    : `<span class="left"><b>${clock(left)}</b> left \u00b7 ${paperPct}%</span>`;
+  $("#top").innerHTML = `
     <p class="eyebrow">Pick up where you left off</p>
-    <div class="hero">
-      <a class="cover" href="${view(p.id)}" aria-label="Resume ${esc(p.title)}">
+    <div class="hero" id="heroCard">
+      <a class="cover" href="${href}" aria-label="Resume ${esc(p.title)}">
         <img src="${cover(p.id)}" alt="" onerror="this.style.visibility='hidden'">
-        <span class="under" style="width:${pct}%"></span>
+        <span class="under" style="width:${paperPct}%"></span>
       </a>
       <div class="body">
+        ${plLine}
         <h1>${esc(p.title)}</h1>
         <p class="cite">${esc(cite(p))}</p>
         <p class="peek" id="heroPeek"></p>
         <div class="track" style="--fill:0%"><i></i><span class="head"></span></div>
         <div class="meta">
-          <a class="play" href="${view(p.id)}"><span class="tri">▶</span> Resume</a>
-          <span class="left"><b>${clock(left)}</b> left · ${pct}%</span>
+          <a class="play" href="${href}"><span class="tri">\u25B6</span> Resume</a>
+          ${meta}
         </div>
       </div>
     </div>`;
   peek(p.id, $("#heroPeek"));
+  $("#heroCard").addEventListener("contextmenu", e => {
+    if (e.target.closest("a")) return;      // let links keep their own menu
+    e.preventDefault(); showMenu(e.clientX, e.clientY, historyMenu(p));
+  });
 }
 
 function startFresh(d) {
@@ -364,9 +402,9 @@ function startFresh(d) {
     : `<p class="lede">The shelf is empty. <a href="/">Drop a PDF</a> to begin.</p>`;
 }
 
-function tileHTML(p) {
+function tileHTML(p, href) {
   const pct = Math.round(frac(p) * 100);
-  return `<a class="tile" href="${view(p.id)}" data-id="${esc(p.id)}">
+  return `<a class="tile" href="${href || view(p.id)}" data-id="${esc(p.id)}">
     <div class="frame">
       <img src="${cover(p.id)}" alt="" loading="lazy"
            onerror="this.style.visibility='hidden'">
@@ -459,11 +497,22 @@ function wall(shelf) {
   wirePeek($("#wall"));
 }
 
+let HISTORY = {};                       // id -> resume item, for the row menus
 function continueRow(items) {
   $("#continue").hidden = items.length < 1;
   if (!items.length) return;
-  $("#crow").innerHTML = items.map(tileHTML).join("");
+  HISTORY = Object.fromEntries(items.map(it => [it.id, it]));
+  $("#crow").innerHTML = items.map(it => tileHTML(it, openHref(it))).join("");
   wirePeek($("#crow"));
+  $("#crow").querySelectorAll(".tile").forEach(t => {
+    const it = HISTORY[t.dataset.id];
+    t.addEventListener("click", e => { e.preventDefault(); select(t.dataset.id); });
+    t.addEventListener("dblclick", e => { e.preventDefault(); location.href = openHref(it); });
+    t.addEventListener("contextmenu", e => {
+      e.preventDefault(); select(t.dataset.id);
+      showMenu(e.clientX, e.clientY, historyMenu(it));
+    });
+  });
 }
 
 // ------------------------------------------------------- folder browser
@@ -507,7 +556,7 @@ function renderFolders() {
 
   const hint = papers.length
     ? `${papers.length} paper${papers.length === 1 ? "" : "s"}${currentFolder && !ung ? " here" : ""}`
-      + ` \u00b7 drag onto a folder to move, \u2318-drag to copy, click to select, right-click for more`
+      + ` \u00b7 single-click selects, double-click opens \u00b7 drag to move, \u2318-drag to copy, right-click for more`
     : (ung ? "no papers here" : (currentFolder ? "no papers here" : ""));
   const papersBlock = `<p class="fhint">${hint}</p>`
     + `<div class="wall fpapers" id="fpapers">${papers.map(paperTile).join("")}</div>`;
@@ -524,7 +573,14 @@ function wireFolders() {
   $("#folders").querySelectorAll(".crumb .c").forEach(c =>
     c.addEventListener("click", () => { currentFolder = c.dataset.f || null; selectedPid = null; renderFolders(); }));
   $("#folders").querySelectorAll(".folder").forEach(f => {
-    f.addEventListener("click", () => { currentFolder = f.dataset.f; selectedPid = null; renderFolders(); });
+    f.addEventListener("click", () => {       // single click selects
+      selectedPid = null;
+      $("#folders").querySelectorAll(".folder").forEach(x =>
+        x.classList.toggle("sel", x === f));
+    });
+    f.addEventListener("dblclick", () => {    // double click opens
+      currentFolder = f.dataset.f; selectedPid = null; renderFolders();
+    });
     if (f.dataset.f !== UNGROUPED) {          // real folders drag to reparent
       f.addEventListener("dragstart", e => {
         e.dataTransfer.effectAllowed = "move";
@@ -588,7 +644,7 @@ function wireFolders() {
 
 function select(pid) {
   selectedPid = pid;
-  $("#fpapers")?.querySelectorAll(".tile").forEach(t =>
+  document.querySelectorAll("#fpapers .tile, #crow .tile").forEach(t =>
     t.classList.toggle("sel", t.dataset.id === pid));
 }
 
@@ -808,8 +864,9 @@ function render(d) {
   const g = d.resume && d.resume[0];
   if (g) requestAnimationFrame(() => {
     const t = $(".hero .track"); if (t) {
-      const p = g.duration ? Math.min(100, Math.round((g.at||0)/g.duration*100)) : 0;
-      t.style.setProperty("--fill", p + "%");
+      const f = g.playlist_id ? (g.listened_frac || 0)
+              : (g.duration ? (g.at || 0) / g.duration : 0);
+      t.style.setProperty("--fill", Math.min(100, Math.round(f * 100)) + "%");
     }
   });
 }

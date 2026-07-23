@@ -748,6 +748,50 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             return f"{model} via API"
         return f"{model} via {llm.get('runner')}"
 
+    def _folder_path(plid):
+        segs, cur = [], plid
+        while cur:
+            pl = lib.data["playlists"].get(cur)
+            if not pl:
+                break
+            segs.insert(0, pl.get("name") or cur)
+            cur = pl.get("parent")
+        return " / ".join(segs)
+
+    DONE = 0.95
+
+    def _with_playlist(item, papers):
+        """If the resumed paper was opened from a folder that still holds it,
+        turn the item into a playlist-aware one: shown paper = the current
+        (next unfinished) member, plus time-through-folder progress."""
+        plid = item.pop("pl", None)
+        folder = lib.data["playlists"].get(plid) if plid else None
+        if not folder:
+            return item
+        members = [(m, papers[m]) for m in folder.get("order", [])
+                   if m in papers and papers[m].get("status") == "ready"]
+        if not any(m == item["id"] for m, _ in members):
+            return item                      # not in this folder anymore
+        durs = [(pp.get("duration") or 0) for _, pp in members]
+        total = sum(durs) or 1
+        listened = sum(min(pp.get("resume_t") or 0, pp.get("duration") or 0)
+                       for _, pp in members)
+        done = lambda pp: (pp.get("duration") and
+                           (pp.get("resume_t") or 0) >= DONE * pp["duration"])
+        idx = next(i for i, (m, _) in enumerate(members) if m == item["id"])
+        cur = idx
+        while cur < len(members) and done(members[cur][1]):
+            cur += 1                          # skip finished papers
+        if cur >= len(members):
+            cur = idx                         # all done: stay on the anchor
+        cid, cp = members[cur]
+        return {"id": cid, "title": cp.get("title"), "authors": cp.get("authors"),
+                "year": cp.get("year"), "at": cp.get("resume_t"),
+                "duration": cp.get("duration"), "playlist_id": plid,
+                "playlist_path": _folder_path(plid), "pos": cur + 1,
+                "count": len(members), "listened_frac": round(listened / total, 4),
+                "anchor_id": item["id"]}    # the paper you listened to; forget targets it
+
     @app.get("/api/dashboard")
     def dashboard_data(request: Request):
         snap = _scoped(caller(request))
@@ -766,12 +810,14 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                     "authors": p.get("authors"), "year": p.get("year"),
                     "at": p.get("resume_t"), "duration": p.get("duration")}
         resume = sorted(
-            ({**card(pid, p), "opened": p.get("last_opened") or 0}
+            ({**card(pid, p), "opened": p.get("last_opened") or 0,
+              "pl": p.get("last_playlist")}
              for pid, p in papers.items()
              if p.get("status") == "ready" and (p.get("resume_t") or 0) > 30),
             # most recently opened first; papers predating last_opened fall
             # back to how far in you are, so nothing vanishes on upgrade
             key=lambda r: (-(r["opened"]), -(r["at"] or 0)))[:8]
+        resume = [_with_playlist(r, papers) for r in resume]
         # the whole shelf, newest first, for the cover wall
         shelf = [card(pid, p) for pid, p in sorted(
             papers.items(), key=lambda kv: -(kv[1].get("added") or 0))
@@ -1112,6 +1158,22 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         shutil.rmtree(lib.root / pid, ignore_errors=True)
         return {"ok": True}
 
+    @app.post("/api/papers/{pid}/forget")
+    def forget_paper(pid: str, request: Request):
+        """Remove a paper from the resume history: clear the caller's saved
+        position so it leaves 'in progress'. Does not delete the paper."""
+        entry = see(pid, request)
+        who = caller(request)
+        with lib.lock:
+            if multiuser and who is not None and entry.get("owner") != who:
+                (entry.get("resume_by") or {}).pop(who, None)   # a reader's own
+            else:
+                entry["resume_t"] = 0.0
+                entry["last_opened"] = 0
+                entry["last_playlist"] = None
+            lib.save()
+        return {"ok": True}
+
     @app.post("/api/papers/{pid}/regenerate")
     def regenerate(pid: str, request: Request):
         own(pid, request)
@@ -1327,13 +1389,17 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         return {"text": " ".join(out)[:360]}
 
     @app.get("/view/{pid}/{path:path}")
-    def view(pid: str, request: Request, path: str = ""):
+    def view(pid: str, request: Request, path: str = "", pl: str = ""):
         see(pid, request)          # the audio itself, not just the listing
         if path in ("", "index.html"):
-            # "pick up where you left off" should order by when you last
-            # OPENED a paper, not how deep the saved position is — a 90%-done
-            # paper should not outrank one you opened this morning at 10%
-            lib.update(pid, bump=False, persist=False, last_opened=time.time())
+            # "pick up where you left off" orders by when you last OPENED a
+            # paper, not how deep the saved position is. `pl` records the
+            # FOLDER you opened it from, so the hero can show progress through
+            # that playlist; opening without one clears it back to per-paper.
+            folder = lib.data["playlists"].get(pl) if pl else None
+            context = pl if (folder and pid in folder.get("order", [])) else None
+            lib.update(pid, bump=False, persist=False,
+                       last_opened=time.time(), last_playlist=context)
         base = lib.view_dir(pid).resolve()
         target = (base / (path or "index.html")).resolve()
         if base != target and base not in target.parents:

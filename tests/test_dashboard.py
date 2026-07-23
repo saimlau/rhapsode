@@ -123,6 +123,65 @@ def c_get_playlists(app):
     return TestClient(app).get("/api/dashboard").json()["playlists"]
 
 
+
+def _folder_app():
+    root = Path(tempfile.mkdtemp())
+    lib = server.Library(root)
+    worker = server.Worker(lib, "af_heart", 1.0, 150)
+
+    def paper(pid, at, dur):
+        d = root / pid / "readalong"; d.mkdir(parents=True)
+        (d / "index.html").write_text("x")
+        lib.data["papers"][pid] = {"id": pid, "status": "ready", "title": pid,
+                                   "authors": None, "year": None, "resume_t": at,
+                                   "duration": dur, "added": 1.0}
+        lib.data["order"].append(pid)
+
+    for pid, at, dur in [("p1", 1000, 1000), ("p2", 300, 1000), ("p3", 0, 1000)]:
+        paper(pid, at, dur)
+    lib.data["playlists"]["sheep"] = {"name": "Sheep Model", "parent": None,
+                                      "order": ["p1", "p2", "p3"]}
+    lib.save()
+    return TestClient(server.create_app(lib, worker, {}, None)), lib
+
+
+def test_resume_is_playlist_aware_when_opened_from_a_folder():
+    c, lib = _folder_app()
+    c.get("/view/p2/index.html?pl=sheep")         # opened from the folder
+    h = c.get("/api/dashboard").json()["resume"][0]
+    assert h["playlist_path"] == "Sheep Model"
+    assert h["pos"] == 2 and h["count"] == 3
+    assert abs(h["listened_frac"] - (1300 / 3000)) < 0.001   # time through folder
+    assert h["anchor_id"] == "p2"
+
+
+def test_current_advances_past_a_finished_paper():
+    c, lib = _folder_app()
+    lib.data["papers"]["p2"]["resume_t"] = 980     # p2 now finished (>=95%)
+    lib.save()
+    c.get("/view/p2/index.html?pl=sheep")
+    h = c.get("/api/dashboard").json()["resume"][0]
+    assert h["id"] == "p3" and h["pos"] == 3, "hero points at the next unfinished"
+    assert h["anchor_id"] == "p2"
+
+
+def test_opening_flat_clears_the_playlist_context():
+    c, lib = _folder_app()
+    c.get("/view/p2/index.html?pl=sheep")
+    assert c.get("/api/dashboard").json()["resume"][0].get("playlist_path")
+    c.get("/view/p2/index.html")                   # reopened without a folder
+    assert c.get("/api/dashboard").json()["resume"][0].get("playlist_path") is None
+
+
+def test_forget_removes_a_paper_from_history():
+    c, lib = _folder_app()
+    c.get("/view/p2/index.html")                   # p2 in progress, flat
+    assert "p2" in [r["id"] for r in c.get("/api/dashboard").json()["resume"]]
+    c.post("/api/papers/p2/forget")
+    assert "p2" not in [r["id"] for r in c.get("/api/dashboard").json()["resume"]]
+    assert "p2" in lib.data["papers"], "the paper itself is not deleted"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

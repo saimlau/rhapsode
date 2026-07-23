@@ -467,8 +467,10 @@ function play(id, autoplay) {
   currentId = id;
   const t = p.resume_t > 5 && p.resume_t < (p.duration || 1e9) - 10
             ? p.resume_t : 0;
+  const inPl = activePl && playlists()[activePl];
   $("frame").src = `/view/${id}/index.html?embed=1&t=${t.toFixed(1)}` +
-                   (autoplay ? "&autoplay=1" : "");
+                   (autoplay ? "&autoplay=1" : "") +
+                   (inPl ? "&pl=" + encodeURIComponent(activePl) : "");
   render();
 }
 function nextReady(afterId) {
@@ -803,7 +805,10 @@ $("plTitle").onclick = e => {
 };
 
 let pendingPlay = new URLSearchParams(location.search).get("play");
-let pendingPl = new URLSearchParams(location.search).get("playlist");
+// ?playlist= (id or name) is the older deep link; ?pl= is what the
+// dashboard's playlist-aware "Resume" sends (a folder plid)
+let pendingPl = new URLSearchParams(location.search).get("playlist")
+             || new URLSearchParams(location.search).get("pl");
 function apply(snap) {
   state = snap;
   if (activePl && !playlists()[activePl]) {
