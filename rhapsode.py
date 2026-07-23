@@ -785,6 +785,8 @@ def main():
                         help="open the read-along view, generating it if missing")
     parser.add_argument("--gui", action="store_true",
                         help="start the library web app")
+    parser.add_argument("--gen-key", action="store_true",
+                        help="print a fresh [secrets] key for config.toml and exit")
     parser.add_argument("--library", type=Path,
                         default=library_path(cfg),
                         help="library folder for --gui")
@@ -800,6 +802,12 @@ def main():
     parser.add_argument("--no-llm", action="store_true",
                         help="skip the LLM extractor even if [llm] is enabled")
     args = parser.parse_args()
+
+    if args.gen_key:
+        import secretbox
+        print(secretbox.gen_key())
+        return
+
     grobid_cfg = None if args.no_grobid else cfg["grobid"]
     llm_cfg = None if args.no_llm else dict(cfg["llm"])
     if args.llm and llm_cfg is not None:
@@ -812,7 +820,8 @@ def main():
                    open_browser=cfg["gui"]["open"] and not args.no_open,
                    grobid_cfg=grobid_cfg, tts_cfg=cfg["tts"],
                    idle_exit_min=cfg["gui"].get("idle_exit_min", 0),
-                   llm_cfg=llm_cfg, auth_cfg=cfg.get("auth"))
+                   llm_cfg=llm_cfg, auth_cfg=cfg.get("auth"),
+                   secrets_cfg=cfg.get("secrets"))
         return
 
     if args.pdf is None:

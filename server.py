@@ -26,6 +26,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
 from starlette.concurrency import run_in_threadpool
 
 import auth
+import secretbox
 import rhapsode as p2a
 from extraction import clean_text, extract_segments
 
@@ -167,18 +168,56 @@ class Library:
         return self.root / pid / "readalong"
 
 
+# --- metered resources: paid backends the operator fronts. A resource's
+# per-user usage is what quota gating and the admin dashboard read. v1 has
+# one; a shared Anthropic/OpenAI/Gemini key later registers as another.
+METERS = {"tts_hours": {"label": "audio hours", "unit": "h"}}
+
+
+def operator_tts_hours(lib, who):
+    """Audio hours of `who`'s ready papers synthesised on the OPERATOR's Modal
+    account (billed absent = operator). Derived from the library, so deleting a
+    paper drops the usage — no separate ledger to fall out of sync."""
+    total = 0.0
+    for p in lib.snapshot()["papers"].values():
+        if (p.get("status") == "ready" and p.get("owner") == who
+                and p.get("billed", "operator") == "operator"):
+            total += p.get("duration") or 0
+    return round(total / 3600, 4)
+
+
+def decrypt_profile(users, who, key):
+    """The owner's decrypted Modal profile, or None (no key, none attached, or
+    a blob that won't decrypt — treat all three as 'run on the operator')."""
+    if not (users and who and key):
+        return None
+    blob = users.get_modal_enc(who)
+    if not blob:
+        return None
+    try:
+        return json.loads(secretbox.decrypt(blob, key, who.encode()))
+    except Exception:
+        return None      # never surface the reason; fall back quietly
+
+
+QUOTA_BLOCK_MSG = ("Over your shared-compute quota. Attach your own Modal in "
+                   "Settings, or ask an admin to raise your cap.")
+
+
 class Worker(threading.Thread):
     """Single generation thread — the GPU is serial; the model stays warm
     during a batch and is parked/unloaded (with GROBID stopped) when the
     queue has been idle, so nothing heavy stays resident between bursts."""
 
     def __init__(self, lib, voice, speed, dpi, grobid_cfg=None, tts_cfg=None,
-                 idle_exit_min=0, llm_cfg=None):
+                 idle_exit_min=0, llm_cfg=None, users=None, secret_key=None):
         super().__init__(daemon=True)
         self.lib, self.voice, self.speed, self.dpi = lib, voice, speed, dpi
         self.grobid_cfg = grobid_cfg
         self.tts_cfg = tts_cfg or {}
         self.llm_cfg = llm_cfg
+        self.users = users
+        self.secret_key = secret_key
         self.idle_exit_min = idle_exit_min or 0
         self.last_activity = time.time()
         self.q = queue.Queue()
@@ -222,6 +261,36 @@ class Worker(threading.Thread):
         _, fut = self._prefetch
         self._prefetch = None
         return fut.result()
+
+    def _resolve_creds(self, owner):
+        """(tts_cfg, llm_cfg, billed) for this paper's owner: their own Modal
+        if attached (bills them), else the operator's shared endpoint."""
+        prof = decrypt_profile(self.users, owner, self.secret_key)
+        tts, llm, billed = self.tts_cfg, self.llm_cfg, "operator"
+        if prof and prof.get("tts"):
+            t = prof["tts"]
+            tts = {**self.tts_cfg, "backend": "modal",
+                   "modal_endpoint": t["endpoint"],
+                   "modal_token_id": t["token_id"],
+                   "modal_token_secret": t["token_secret"]}
+            billed = "self"
+        if prof and prof.get("llm"):
+            l = prof["llm"]
+            llm = {**(self.llm_cfg or {}), "enabled": True,
+                   "api_base_url": l["api_base_url"], "api_key": l["api_key"]}
+        return tts, llm, billed
+
+    def _quota_block(self, owner, billed):
+        """The block message if this operator-billed job is over the owner's
+        cap, else None. Self-billed jobs and uncapped users are never blocked."""
+        if billed != "operator" or not self.users or not owner:
+            return None
+        cap = self.users.get_quota(owner).get("tts_hours")
+        if cap is None:
+            return None
+        if operator_tts_hours(self.lib, owner) >= cap:
+            return QUOTA_BLOCK_MSG
+        return None
 
     def _idle_tick(self):
         p2a.maybe_idle_models(self.tts_cfg.get("park_after_s", 300),
@@ -282,25 +351,40 @@ class Worker(threading.Thread):
                     self.lib.update(pid, persist=False,
                                     progress=round(frac, 3), stage=label)
 
+            # resolve creds once per job by the paper's OWNER: their own Modal
+            # profile (bills them, billed="self") if attached, else the
+            # operator's shared endpoint (billed="operator")
+            with self.lib.lock:
+                owner = self.lib.data["papers"][pid].get("owner")
+            tts_cfg, llm_cfg, billed = self._resolve_creds(owner)
+
+            blocked = self._quota_block(owner, billed)
+            if blocked:
+                self.lib.update(pid, status="blocked", progress=0.0,
+                                error=blocked)
+                continue
+
             try:
                 prepared = self._take_prefetch(pid)
                 if prepared is None:
                     progress(0.0, "extracting text")
                     prepared = p2a.prepare_units(self.lib.pdf_path(pid),
-                                                 self.grobid_cfg, self.llm_cfg)
+                                                 self.grobid_cfg, llm_cfg)
                 else:
                     # extraction already happened in the background; say so
                     # rather than showing a blank stage until the first unit
                     progress(0.0, "starting narration")
                 # extraction for the NEXT paper runs while this one narrates,
-                # so neither remote container idles into a cold start
+                # so neither remote container idles into a cold start. The
+                # prefetch deliberately uses the operator self.llm_cfg — a v1
+                # simplification, since LLM tokens are not metered this phase.
                 self._start_prefetch()
                 info = p2a.generate_readalong(
                     self.lib.pdf_path(pid), self.lib.view_dir(pid),
                     self.voice, self.speed, self.dpi, progress,
-                    grobid_cfg=self.grobid_cfg, tts_cfg=self.tts_cfg,
-                    llm_cfg=self.llm_cfg, prepared=prepared)
-                fields = dict(status="ready", progress=1.0,
+                    grobid_cfg=self.grobid_cfg, tts_cfg=tts_cfg,
+                    llm_cfg=llm_cfg, prepared=prepared)
+                fields = dict(status="ready", progress=1.0, billed=billed,
                               duration=round(info["duration"], 1),
                               warnings=info["warnings"])
                 with self.lib.lock:
@@ -338,7 +422,7 @@ class Worker(threading.Thread):
                     grobid.touch()
 
 
-def create_app(lib, worker, auth_cfg=None, users=None):
+def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
     app = FastAPI(title="Rhapsode")
 
     from fastapi.exceptions import RequestValidationError
@@ -676,12 +760,131 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         who = caller(request)
         if not multiuser or not who or not users.is_admin(who):
             raise HTTPException(403, "admins only")
-        counts = {}
-        for entry in lib.snapshot()["papers"].values():
-            counts[entry.get("owner")] = counts.get(entry.get("owner"), 0) + 1
-        return {"users": [{"name": n, "admin": users.is_admin(n),
-                           "papers": counts.get(n, 0)} for n in users.names()],
-                "invites": users.open_invites()}
+        papers = lib.snapshot()["papers"]
+        counts, hours = {}, {}
+        for p in papers.values():
+            o = p.get("owner")
+            counts[o] = counts.get(o, 0) + 1
+            if p.get("status") == "ready":
+                hours[o] = hours.get(o, 0.0) + (p.get("duration") or 0)
+        rows = []
+        for n in users.names():
+            rows.append({
+                "name": n, "admin": users.is_admin(n),
+                "papers": counts.get(n, 0),
+                "hours": round(hours.get(n, 0.0) / 3600, 2),
+                "operator_hours": operator_tts_hours(lib, n),
+                "self_hosting": users.has_modal(n),
+                "quota": users.get_quota(n)})
+        by_status = {}
+        for p in papers.values():
+            by_status[p.get("status")] = by_status.get(p.get("status"), 0) + 1
+        try:
+            st = os.statvfs(lib.root)
+            free_gb = round(st.f_bavail * st.f_frsize / 1e9, 1)
+        except OSError:
+            free_gb = None
+        health = {"queued": by_status.get("pending", 0),
+                  "generating": by_status.get("generating", 0),
+                  "needs_attention": by_status.get("error", 0)
+                                     + by_status.get("blocked", 0),
+                  "free_gb": free_gb}
+        return {"users": rows, "invites": users.open_invites(), "health": health,
+                "meters": METERS}
+
+    @app.put("/api/users/{name}")
+    def set_user_quota(name: str, request: Request, body: dict):
+        who = caller(request)
+        if not multiuser or not who or not users.is_admin(who):
+            raise HTTPException(404, "not found")
+        if not users.exists(name):
+            raise HTTPException(404, "unknown user")
+        for res, val in (body.get("quota") or {}).items():
+            users.set_quota(name, res, None if val is None else float(val))
+        return {"ok": True}
+
+    # -------------------------------------------------- self-service Modal
+    # /api/account/* is ALWAYS "me": the caller, resolved from the session,
+    # never a path parameter. There is deliberately no route that names
+    # another user, so no user can read or write anyone else's profile.
+    def _me(request):
+        who = caller(request)
+        if not multiuser or not who:
+            raise HTTPException(404, "not found")
+        return who
+
+    def _last4(s):
+        return (s or "")[-4:]
+
+    @app.get("/api/account/modal")
+    def account_modal(request: Request):
+        who = _me(request)
+        prof = decrypt_profile(users, who, secret_key) or {}
+        tts, llm = prof.get("tts") or {}, prof.get("llm") or {}
+        # Never the secret: presence, the non-secret endpoint/base_url, and
+        # the last 4 chars of the token as a "which key is this?" hint only.
+        return {
+            "enabled": bool(secret_key),
+            "tts": {"attached": bool(tts),
+                    "endpoint": tts.get("endpoint", ""),
+                    "last4": _last4(tts.get("token_secret"))},
+            "llm": {"attached": bool(llm),
+                    "base_url": llm.get("api_base_url", ""),
+                    "last4": _last4(llm.get("api_key"))},
+            "usage": {"tts_hours": operator_tts_hours(lib, who)},
+            "quota": users.get_quota(who),
+        }
+
+    @app.put("/api/account/modal")
+    def set_account_modal(request: Request, body: dict):
+        who = _me(request)
+        if not secret_key:
+            raise HTTPException(400, "per-user Modal is not enabled on this "
+                                     "server ([secrets] key is unset)")
+        prof = {}
+        tts = body.get("tts") or {}
+        if tts.get("endpoint"):
+            prof["tts"] = {"endpoint": str(tts["endpoint"]),
+                           "token_id": str(tts.get("token_id", "")),
+                           "token_secret": str(tts.get("token_secret", ""))}
+        llm = body.get("llm") or {}
+        if llm.get("api_base_url"):
+            prof["llm"] = {"api_base_url": str(llm["api_base_url"]),
+                           "api_key": str(llm.get("api_key", ""))}
+        if not prof:
+            raise HTTPException(400, "nothing to save")
+        blob = secretbox.encrypt(json.dumps(prof), secret_key, who.encode())
+        users.set_modal_enc(who, blob)
+        return {"ok": True}
+
+    @app.delete("/api/account/modal")
+    def clear_account_modal(request: Request):
+        who = _me(request)
+        users.clear_modal_enc(who)
+        return {"ok": True}
+
+    @app.post("/api/account/modal/test")
+    def test_account_modal(request: Request):
+        who = _me(request)
+        prof = decrypt_profile(users, who, secret_key) or {}
+        tts = prof.get("tts")
+        if not tts:
+            raise HTTPException(400, "no Modal TTS endpoint attached")
+        cfg = {"backend": "modal", "modal_endpoint": tts["endpoint"],
+               "modal_token_id": tts["token_id"],
+               "modal_token_secret": tts["token_secret"]}
+        # one tiny synth against the caller's OWN endpoint — the only place the
+        # server contacts Modal, and only on an explicit click by the payer
+        unit = {"text": "test.", "kind": "body"}
+        try:
+            for _ in p2a._modal_unit_audio([unit], "af_heart", 1.0, cfg):
+                break
+            return {"ok": True}
+        except Exception:
+            # never surface the exception text: it can contain the endpoint/token
+            return {"ok": False,
+                    "error": "Could not reach your Modal endpoint. Check the "
+                             "URL and token pair in your settings."}
 
     @app.delete("/api/invites/{key}")
     def revoke_invite(key: str, request: Request):
@@ -702,6 +905,16 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         page = REPO / "admin.html"
         if not page.is_file():
             return HTMLResponse("<p>admin.html missing</p>", status_code=500)
+        return HTMLResponse(page.read_text())
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page(request: Request):
+        who = caller(request)
+        if not multiuser or not who:
+            raise HTTPException(404, "not found")
+        page = REPO / "settings.html"
+        if not page.is_file():
+            return HTMLResponse("<p>settings.html missing</p>", status_code=500)
         return HTMLResponse(page.read_text())
 
     @app.delete("/api/users/{name}")
@@ -834,8 +1047,10 @@ def create_app(lib, worker, auth_cfg=None, users=None):
              "parent": pl.get("parent"),
              "order": [pid for pid in pl.get("order", []) if pid in ready_ids]}
             for plid, pl in (snap.get("playlists") or {}).items()]
-        failed = [{"id": pid, "title": p.get("title"), "error": p.get("error")}
-                  for pid, p in papers.items() if p.get("status") == "error"]
+        failed = [{"id": pid, "title": p.get("title"),
+                   "error": p.get("error"), "status": p.get("status")}
+                  for pid, p in papers.items()
+                  if p.get("status") in ("error", "blocked")]
         try:
             st = os.statvfs(lib.root)
             free_gb = st.f_bavail * st.f_frsize / 1e9
@@ -1496,7 +1711,8 @@ def _bootstrap_users(lib, auth_cfg):
 
 
 def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
-        tts_cfg=None, idle_exit_min=0, llm_cfg=None, auth_cfg=None):
+        tts_cfg=None, idle_exit_min=0, llm_cfg=None, auth_cfg=None,
+        secrets_cfg=None):
     root = Path(root)
     if not root.exists() and not root.parent.exists():
         sys.exit(f"error: library location unavailable (is the volume "
@@ -1506,8 +1722,16 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     lib = Library(root)
     _migrate_playlist_tree(lib)
     users = _bootstrap_users(lib, auth_cfg or {})
+    secret_key = None
+    keyb64 = (secrets_cfg or {}).get("key")
+    if keyb64:
+        try:
+            secret_key = secretbox.load_key(keyb64)
+        except ValueError as e:
+            sys.exit(f"error: [secrets] key is invalid ({e}). Run "
+                     f"'rhapsode --gen-key' for a fresh one.")
     worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg, idle_exit_min,
-                    llm_cfg)
+                    llm_cfg, users=users, secret_key=secret_key)
     with lib.lock:  # crash recovery: re-queue anything left mid-generation
         for pid, entry in lib.data["papers"].items():
             if entry["status"] in ("generating", "pending"):
@@ -1532,8 +1756,8 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     # never-ending SSE streams would make graceful shutdown wait forever
     # (Ctrl+C seemingly dead); force-close connections after a short grace
     try:
-        uvicorn.run(create_app(lib, worker, auth_cfg, users), host="127.0.0.1",
-                    port=port,
+        uvicorn.run(create_app(lib, worker, auth_cfg, users, secret_key),
+                    host="127.0.0.1", port=port,
                     log_level="warning", timeout_graceful_shutdown=3)
     finally:
         import grobid

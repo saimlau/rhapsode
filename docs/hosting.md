@@ -237,6 +237,66 @@ time on **your** Modal account. Raise `PAPERS_PER_USER` in `server.py` if
 that is wrong for your group. There is no bandwidth or disk quota beyond
 that — invite people you would lend your laptop to.
 
+### Per-user Modal, and per-user quotas
+
+By default every paper is synthesised on **your** Modal account — you pay for
+the whole group. Phase 5 adds two ways to change that: a colleague can attach
+their own Modal so their papers bill to them, and you can cap how much of
+*your* compute each person spends.
+
+Turn it on by adding an encryption key. Generate one:
+
+```bash
+.venv/bin/python rhapsode.py --gen-key
+```
+
+Paste the printed line into `config.toml`:
+
+```toml
+[secrets]
+key = "<base64 of 32 bytes>"
+```
+
+The key encrypts each user's stored Modal token (AES-256-GCM) so a copy of the
+library alone can never decrypt one. That is also the catch:
+
+!!! danger "Back the key up separately from the library"
+    The key lives **only** in `config.toml`, never in the library. If you lose
+    it, every attached Modal profile becomes permanently unrecoverable — users
+    would have to re-enter their tokens. Back `config.toml` up somewhere other
+    than where you back up the library, so a single lost disk cannot take both.
+
+With no `[secrets] key` set, this feature is simply off: the settings page says
+so, per-user Modal is unavailable, and everything runs on the operator account
+exactly as before. Restart after adding the key.
+
+**Users attach their own Modal at `/settings`.** A signed-in colleague opens the
+library footer's Settings link and fills in their own TTS endpoint and token. A
+**Test** button runs one tiny synth against *their* own
+endpoint to confirm it works — the only thing that ever pings Modal on a click,
+and only their container, their cost. From then on their papers bill to them and
+are never counted against any cap. Tokens are write-only: the page shows only
+that a profile is attached and the last four characters, never the secret.
+
+In this version the settings page manages the TTS (narration) Modal endpoint
+only; per-user LLM (extraction) self-hosting is planned for a later phase. The
+backend already routes a user's own LLM profile when one is present — there is
+just no UI to set one yet.
+
+**You set per-user audio-hour caps on the People page** (`/admin`). Each account
+shows papers, audio-hours, whether they self-host, and their operator-hours as
+`used / cap`. "Set cap" (or "Change") sets a ceiling in audio hours; leave it
+blank for unlimited. The cap counts only operator-billed hours — a user on their
+own Modal is never gated.
+
+The ceiling is soft. When a user is over their cap, their next operator-billed
+paper is not synthesised: it shows in the queue as **`blocked`** with the reason
+*"Over your shared-compute quota. Attach your own Modal in Settings, or ask an
+admin to raise your cap."* The paper stays and is regenerable — it turns into
+real audio the moment the user attaches their own Modal (their jobs stop
+counting) or you raise the cap. The job that crosses the line may overshoot by
+one paper; that is expected for a soft ceiling.
+
 ### Rolling it back
 
 Set `multiuser = false` and restart. The single password works again and
