@@ -104,6 +104,13 @@ main { max-width: 68rem; margin: 0 auto;
 .shelf-head { display: flex; align-items: baseline; justify-content: space-between;
   gap: 1rem; margin-bottom: .7rem; }
 .shelf-head .count { font: .72rem var(--mono); color: var(--muted); }
+.head-right { display: flex; align-items: center; gap: .9rem; }
+.viewtog { display: inline-flex; border: 1px solid var(--hairline);
+  border-radius: 999px; overflow: hidden; }
+.viewtog button { font: 500 .74rem var(--sans); color: var(--muted);
+  background: none; border: 0; padding: .28rem .85rem; cursor: pointer; }
+.viewtog button.on { color: var(--ink); background: var(--marker-wash); }
+.viewtog button:not(.on):hover { color: var(--ink); }
 
 /* C's idea, folded in: when several papers are in progress, a compact row
    under the hero — the hero is the one you're deepest into, this is the rest */
@@ -116,6 +123,7 @@ main { max-width: 68rem; margin: 0 auto;
 
 /* C's facets, folded in: filters on the ONE wall, not duplicated carousels */
 .chips { display: flex; gap: .5rem; flex-wrap: wrap; margin: 0 0 1.2rem; }
+.chips[hidden] { display: none; }
 .chip { font: 500 .74rem var(--sans); color: var(--muted); background: none;
   border: 1px solid var(--hairline); border-radius: 999px; padding: .26rem .72rem;
   cursor: pointer; display: inline-flex; gap: .4rem; align-items: baseline; }
@@ -273,7 +281,10 @@ main { max-width: 68rem; margin: 0 auto;
   <section id="shelfSection" hidden>
     <div class="shelf-head">
       <p class="eyebrow" style="margin:0">The shelf</p>
-      <span class="count" id="shelfCount"></span>
+      <div class="head-right">
+        <span class="count" id="shelfCount"></span>
+        <div class="viewtog" id="viewtog"></div>
+      </div>
     </div>
     <div class="chips" id="chips"></div>
     <div class="wall" id="wall"></div>
@@ -391,7 +402,8 @@ const FILTERS = [
   { key: "year",  label: "By year", whole: true,
     fn: s => [...s].sort((a, b) => (b.year || 0) - (a.year || 0)) },
 ];
-let activeFilter = "all";
+let activeFilter = "all";      // the facet within Covers view
+let viewMode = "folders";      // "covers" | "folders"; folders is home
 let PLAYLISTS = [], SHELF = [], BYID = {};
 let currentFolder = null;              // folder browser location: plid or null
 const UNGROUPED = "__ungrouped__";     // a virtual folder of papers in no folder
@@ -418,20 +430,27 @@ function chips(shelf) {
     return n ? `<button class="chip${f.key === activeFilter ? " on" : ""}"
       data-k="${f.key}">${f.label}${badge}</button>` : "";
   }).join("");
-  const byPl = PLAYLISTS.length
-    ? `<span class="chip-div"></span><button class="chip${activeFilter === "folders" ? " on" : ""}"
-        data-k="folders">By playlist</button>` : "";
-  $("#chips").innerHTML = facets + byPl;
+  $("#chips").innerHTML = facets;
   $("#chips").querySelectorAll(".chip").forEach(c =>
     c.addEventListener("click", () => { activeFilter = c.dataset.k; showView(); }));
 }
 
 function showView() {
-  const folders = activeFilter === "folders";
+  const folders = viewMode === "folders";
   $("#wall").hidden = folders;
   $("#folders").hidden = !folders;
-  chips(SHELF);
-  if (folders) renderFolders(); else wall(SHELF);
+  $("#chips").hidden = folders;        // filters apply to Covers only
+  renderViewToggle();
+  if (folders) renderFolders(); else { chips(SHELF); wall(SHELF); }
+}
+
+function renderViewToggle() {
+  const t = $("#viewtog");
+  t.innerHTML =
+    `<button data-v="covers" class="${viewMode === "covers" ? "on" : ""}">Covers</button>`
+    + `<button data-v="folders" class="${viewMode === "folders" ? "on" : ""}">Folders</button>`;
+  t.querySelectorAll("button").forEach(b =>
+    b.addEventListener("click", () => { viewMode = b.dataset.v; showView(); }));
 }
 
 function wall(shelf) {
@@ -808,7 +827,7 @@ async function load() {
 }
 // keyboard clipboard, only in the folder browser
 document.addEventListener("keydown", e => {
-  if (activeFilter !== "folders") return;
+  if (viewMode !== "folders") return;
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")) return;
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key === "c" && selectedPid) {
