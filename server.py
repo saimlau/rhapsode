@@ -1711,7 +1711,8 @@ def _bootstrap_users(lib, auth_cfg):
 
 
 def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
-        tts_cfg=None, idle_exit_min=0, llm_cfg=None, auth_cfg=None):
+        tts_cfg=None, idle_exit_min=0, llm_cfg=None, auth_cfg=None,
+        secrets_cfg=None):
     root = Path(root)
     if not root.exists() and not root.parent.exists():
         sys.exit(f"error: library location unavailable (is the volume "
@@ -1721,8 +1722,16 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     lib = Library(root)
     _migrate_playlist_tree(lib)
     users = _bootstrap_users(lib, auth_cfg or {})
+    secret_key = None
+    keyb64 = (secrets_cfg or {}).get("key")
+    if keyb64:
+        try:
+            secret_key = secretbox.load_key(keyb64)
+        except ValueError as e:
+            sys.exit(f"error: [secrets] key is invalid ({e}). Run "
+                     f"'rhapsode --gen-key' for a fresh one.")
     worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg, idle_exit_min,
-                    llm_cfg)
+                    llm_cfg, users=users, secret_key=secret_key)
     with lib.lock:  # crash recovery: re-queue anything left mid-generation
         for pid, entry in lib.data["papers"].items():
             if entry["status"] in ("generating", "pending"):
@@ -1747,8 +1756,8 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
     # never-ending SSE streams would make graceful shutdown wait forever
     # (Ctrl+C seemingly dead); force-close connections after a short grace
     try:
-        uvicorn.run(create_app(lib, worker, auth_cfg, users), host="127.0.0.1",
-                    port=port,
+        uvicorn.run(create_app(lib, worker, auth_cfg, users, secret_key),
+                    host="127.0.0.1", port=port,
                     log_level="warning", timeout_graceful_shutdown=3)
     finally:
         import grobid
