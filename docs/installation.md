@@ -24,7 +24,7 @@ brew install ffmpeg espeak-ng
 ```bash
 git clone https://github.com/saimlau/rhapsode && cd rhapsode
 python3 -m venv .venv
-.venv/bin/pip install pymupdf kokoro soundfile requests fastapi uvicorn python-multipart
+.venv/bin/pip install pymupdf kokoro soundfile requests fastapi uvicorn python-multipart cryptography
 ```
 
 The `./rhapsode` launcher (or `rhapsode.bat` on Windows) runs the pipeline
