@@ -209,7 +209,9 @@ main { max-width: 68rem; margin: 0 auto;
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const view = id => `/view/${encodeURIComponent(id)}/index.html`;
+// open inside the library shell (sidebar + reader), resuming at the saved
+// position — NOT the bare /view reader, which has no navigation
+const view = id => `/?play=${encodeURIComponent(id)}`;
 const cover = id => `/view/${encodeURIComponent(id)}/page-000.png`;
 
 function clock(s) {
