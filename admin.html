@@ -77,6 +77,11 @@ button.pri { font: 600 .8rem var(--sans); color: var(--desk); background: var(--
   <p class="lede">Who can use this library</p>
 
   <section class="card">
+    <h2>Usage</h2>
+    <ul id="usage"><li class="empty">…</li></ul>
+  </section>
+
+  <section class="card">
     <h2>Accounts</h2>
     <ul id="users"><li class="empty">Loading…</li></ul>
   </section>
@@ -92,6 +97,11 @@ button.pri { font: 600 .8rem var(--sans); color: var(--desk); background: var(--
     <p class="warn">Anyone holding the link can create one account, so send it
       the way you would send a password. It expires in 14 days; revoke it here
       if it goes astray.</p>
+  </section>
+
+  <section class="card">
+    <h2>Health</h2>
+    <ul id="health"><li class="empty">…</li></ul>
   </section>
 </main>
 
@@ -118,6 +128,28 @@ async function load() {
         <span class="n">expires ${when(i.expires)}</span>
         <button class="act" data-invite="${esc(i.key)}">Revoke</button></li>`).join("")
     : `<li class="empty">No invitations outstanding.</li>`;
+
+  $("#usage").innerHTML = d.users.map(u => {
+    const cap = u.quota && u.quota.tts_hours;
+    const pct = cap ? Math.min(100, Math.round(u.operator_hours / cap * 100)) : 0;
+    const over = cap != null && u.operator_hours >= cap;
+    return `<li>
+      <span class="who">${esc(u.name)}</span>
+      ${u.self_hosting ? '<span class="tag">self-hosting</span>' : ""}
+      <span class="n">${u.hours} h total · ${u.operator_hours} h on shared${
+        cap != null ? ` / ${cap} h` : ""}</span>
+      ${over ? '<span class="tag" style="color:var(--error)">over cap</span>' : ""}
+      <button class="act" data-cap="${esc(u.name)}"
+        data-cur="${cap == null ? "" : cap}">${cap == null ? "Set cap" : "Change"}</button>
+      </li>`;
+  }).join("");
+
+  const h = d.health || {};
+  $("#health").innerHTML = `
+    <li><span class="n">${h.queued || 0} queued · ${h.generating || 0} generating`
+    + `${h.free_gb != null ? ` · ${h.free_gb} GB free` : ""}`
+    + `${h.needs_attention ? ` · <b style="color:var(--error)">${h.needs_attention} need attention</b>` : ""}`
+    + `</span></li>`;
 }
 
 $("#mint").addEventListener("click", async () => {
@@ -138,6 +170,19 @@ $("#copy").addEventListener("click", () => {
 document.addEventListener("click", async e => {
   const user = e.target.dataset?.user;
   const invite = e.target.dataset?.invite;
+  const cap = e.target.dataset?.cap;
+  if (cap) {
+    const cur = e.target.dataset.cur;
+    const val = prompt(`Shared-compute cap for ${cap}, in audio hours `
+                       + `(blank = unlimited):`, cur);
+    if (val === null) return;
+    const quota = { tts_hours: val.trim() === "" ? null : Number(val) };
+    await fetch(`/api/users/${encodeURIComponent(cap)}`, { method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quota }) });
+    load();
+    return;
+  }
   if (user) {
     // removing an account does not remove its papers, and the username can
     // never be reused — say so before it happens, not after
