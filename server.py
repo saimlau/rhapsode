@@ -727,9 +727,12 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                     "authors": p.get("authors"), "year": p.get("year"),
                     "at": p.get("resume_t"), "duration": p.get("duration")}
         resume = sorted(
-            (card(pid, p) for pid, p in papers.items()
+            ({**card(pid, p), "opened": p.get("last_opened") or 0}
+             for pid, p in papers.items()
              if p.get("status") == "ready" and (p.get("resume_t") or 0) > 30),
-            key=lambda r: -(r["at"] or 0))[:5]
+            # most recently opened first; papers predating last_opened fall
+            # back to how far in you are, so nothing vanishes on upgrade
+            key=lambda r: (-(r["opened"]), -(r["at"] or 0)))[:8]
         # the whole shelf, newest first, for the cover wall
         shelf = [card(pid, p) for pid, p in sorted(
             papers.items(), key=lambda kv: -(kv[1].get("added") or 0))
@@ -1052,7 +1055,8 @@ def create_app(lib, worker, auth_cfg=None, users=None):
             return {"ok": True}
         # in-memory immediately, disk at most every 30 s (worst case on a
         # crash: the resume point is half a minute stale)
-        lib.update(pid, bump=False, persist=False, resume_t=_num(body.get("t")))
+        lib.update(pid, bump=False, persist=False,
+                   resume_t=_num(body.get("t")), last_opened=time.time())
         return {"ok": True}
 
     @app.get("/api/status")
@@ -1243,6 +1247,11 @@ def create_app(lib, worker, auth_cfg=None, users=None):
     @app.get("/view/{pid}/{path:path}")
     def view(pid: str, request: Request, path: str = ""):
         see(pid, request)          # the audio itself, not just the listing
+        if path in ("", "index.html"):
+            # "pick up where you left off" should order by when you last
+            # OPENED a paper, not how deep the saved position is — a 90%-done
+            # paper should not outrank one you opened this morning at 10%
+            lib.update(pid, bump=False, persist=False, last_opened=time.time())
         base = lib.view_dir(pid).resolve()
         target = (base / (path or "index.html")).resolve()
         if base != target and base not in target.parents:
