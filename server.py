@@ -200,6 +200,10 @@ def decrypt_profile(users, who, key):
         return None      # never surface the reason; fall back quietly
 
 
+QUOTA_BLOCK_MSG = ("Over your shared-compute quota. Attach your own Modal in "
+                   "Settings, or ask an admin to raise your cap.")
+
+
 class Worker(threading.Thread):
     """Single generation thread — the GPU is serial; the model stays warm
     during a batch and is parked/unloaded (with GROBID stopped) when the
@@ -276,6 +280,18 @@ class Worker(threading.Thread):
                    "api_base_url": l["api_base_url"], "api_key": l["api_key"]}
         return tts, llm, billed
 
+    def _quota_block(self, owner, billed):
+        """The block message if this operator-billed job is over the owner's
+        cap, else None. Self-billed jobs and uncapped users are never blocked."""
+        if billed != "operator" or not self.users or not owner:
+            return None
+        cap = self.users.get_quota(owner).get("tts_hours")
+        if cap is None:
+            return None
+        if operator_tts_hours(self.lib, owner) >= cap:
+            return QUOTA_BLOCK_MSG
+        return None
+
     def _idle_tick(self):
         p2a.maybe_idle_models(self.tts_cfg.get("park_after_s", 300),
                               self.tts_cfg.get("unload_after_s", 1800))
@@ -341,6 +357,12 @@ class Worker(threading.Thread):
             with self.lib.lock:
                 owner = self.lib.data["papers"][pid].get("owner")
             tts_cfg, llm_cfg, billed = self._resolve_creds(owner)
+
+            blocked = self._quota_block(owner, billed)
+            if blocked:
+                self.lib.update(pid, status="blocked", progress=0.0,
+                                error=blocked)
+                continue
 
             try:
                 prepared = self._take_prefetch(pid)
@@ -896,8 +918,10 @@ def create_app(lib, worker, auth_cfg=None, users=None):
              "parent": pl.get("parent"),
              "order": [pid for pid in pl.get("order", []) if pid in ready_ids]}
             for plid, pl in (snap.get("playlists") or {}).items()]
-        failed = [{"id": pid, "title": p.get("title"), "error": p.get("error")}
-                  for pid, p in papers.items() if p.get("status") == "error"]
+        failed = [{"id": pid, "title": p.get("title"),
+                   "error": p.get("error"), "status": p.get("status")}
+                  for pid, p in papers.items()
+                  if p.get("status") in ("error", "blocked")]
         try:
             st = os.statvfs(lib.root)
             free_gb = st.f_bavail * st.f_frsize / 1e9
