@@ -760,12 +760,48 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         who = caller(request)
         if not multiuser or not who or not users.is_admin(who):
             raise HTTPException(403, "admins only")
-        counts = {}
-        for entry in lib.snapshot()["papers"].values():
-            counts[entry.get("owner")] = counts.get(entry.get("owner"), 0) + 1
-        return {"users": [{"name": n, "admin": users.is_admin(n),
-                           "papers": counts.get(n, 0)} for n in users.names()],
-                "invites": users.open_invites()}
+        papers = lib.snapshot()["papers"]
+        counts, hours, op_hours = {}, {}, {}
+        for p in papers.values():
+            o = p.get("owner")
+            counts[o] = counts.get(o, 0) + 1
+            if p.get("status") == "ready":
+                hours[o] = hours.get(o, 0.0) + (p.get("duration") or 0)
+        rows = []
+        for n in users.names():
+            rows.append({
+                "name": n, "admin": users.is_admin(n),
+                "papers": counts.get(n, 0),
+                "hours": round(hours.get(n, 0.0) / 3600, 2),
+                "operator_hours": operator_tts_hours(lib, n),
+                "self_hosting": users.has_modal(n),
+                "quota": users.get_quota(n)})
+        by_status = {}
+        for p in papers.values():
+            by_status[p.get("status")] = by_status.get(p.get("status"), 0) + 1
+        try:
+            st = os.statvfs(lib.root)
+            free_gb = round(st.f_bavail * st.f_frsize / 1e9, 1)
+        except OSError:
+            free_gb = None
+        health = {"queued": by_status.get("pending", 0),
+                  "generating": by_status.get("generating", 0),
+                  "needs_attention": by_status.get("error", 0)
+                                     + by_status.get("blocked", 0),
+                  "free_gb": free_gb}
+        return {"users": rows, "invites": users.open_invites(), "health": health,
+                "meters": METERS}
+
+    @app.put("/api/users/{name}")
+    def set_user_quota(name: str, request: Request, body: dict):
+        who = caller(request)
+        if not multiuser or not who or not users.is_admin(who):
+            raise HTTPException(404, "not found")
+        if not users.exists(name):
+            raise HTTPException(404, "unknown user")
+        for res, val in (body.get("quota") or {}).items():
+            users.set_quota(name, res, None if val is None else float(val))
+        return {"ok": True}
 
     # -------------------------------------------------- self-service Modal
     # /api/account/* is ALWAYS "me": the caller, resolved from the session,
