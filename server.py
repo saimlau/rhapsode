@@ -907,6 +907,16 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
             return HTMLResponse("<p>admin.html missing</p>", status_code=500)
         return HTMLResponse(page.read_text())
 
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page(request: Request):
+        who = caller(request)
+        if not multiuser or not who:
+            raise HTTPException(404, "not found")
+        page = REPO / "settings.html"
+        if not page.is_file():
+            return HTMLResponse("<p>settings.html missing</p>", status_code=500)
+        return HTMLResponse(page.read_text())
+
     @app.delete("/api/users/{name}")
     def remove_user(name: str, request: Request):
         who = caller(request)

@@ -1,0 +1,112 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rhapsode · settings</title>
+<style>
+:root{--desk:#ECEAE6;--side:#E6E3DC;--ink:#2A2721;--muted:#8A857A;
+ --hairline:rgba(40,33,20,.14);--marker:#F5B301;--marker-wash:rgba(245,179,1,.14);
+ --error:#A33F35;--serif:"New York",Georgia,serif;
+ --mono:ui-monospace,Menlo,monospace;--sans:system-ui,-apple-system,sans-serif;}
+@media (prefers-color-scheme:dark){:root{--desk:#1B1A18;--side:#22211E;
+ --ink:#E6E2D8;--muted:#8E8A80;--hairline:rgba(255,250,235,.13);
+ --marker-wash:rgba(245,179,1,.10);--error:#E09287;}}
+*{box-sizing:border-box}body{margin:0;background:var(--desk);color:var(--ink);
+ font-family:var(--sans);line-height:1.5}a{color:inherit}
+.bar{display:flex;align-items:baseline;gap:1.2rem;padding:.85rem clamp(1rem,4vw,2.5rem)}
+.bar .mark{font-family:var(--serif);font-size:1.1rem}
+.bar nav{margin-left:auto;display:flex;gap:1.2rem}
+.bar a{font:500 .8rem var(--sans);color:var(--muted);text-decoration:none}
+.bar a:hover{color:var(--ink)}
+main{max-width:44rem;margin:0 auto;padding:clamp(.6rem,3vw,2rem) clamp(1rem,4vw,2.5rem) 3rem}
+.lede{font-family:var(--serif);font-size:clamp(1.4rem,3.4vw,1.9rem);
+ margin:.6rem 0 1.4rem;font-weight:500}
+.card{background:var(--side);border:1px solid var(--hairline);border-radius:12px;
+ padding:1rem 1.15rem 1.1rem;margin-bottom:1rem}
+.card h2{margin:0 0 .3rem;font:600 .68rem var(--sans);letter-spacing:.13em;
+ text-transform:uppercase;color:var(--muted)}
+.card p.hint{margin:.2rem 0 .9rem;font-size:.85rem;color:var(--muted)}
+label{display:block;font-size:.78rem;color:var(--muted);margin:.6rem 0 .2rem}
+input{width:100%;padding:.5rem .6rem;border:1px solid var(--hairline);
+ border-radius:7px;background:var(--desk);color:var(--ink);font:.85rem var(--mono)}
+.status{font-size:.8rem;margin:.5rem 0}
+.status.on{color:var(--ink)}.status.off{color:var(--muted)}
+.row{display:flex;gap:.5rem;margin-top:.9rem;flex-wrap:wrap}
+button{border:0;border-radius:7px;padding:.5rem .9rem;cursor:pointer;
+ font:.8rem var(--sans);background:rgba(0,0,0,.07);color:var(--ink)}
+button.pri{background:var(--marker);color:#201a05;font-weight:600}
+.usage{font-size:.85rem;color:var(--muted)}
+.msg{font-size:.8rem;margin-left:.4rem}
+.disabled{opacity:.55;pointer-events:none}
+</style>
+
+<div class="bar"><span class="mark">Rhapsode</span>
+ <nav><a href="/dashboard">Home</a><a href="/">Library</a>
+ <a href="/logout">Sign out</a></nav></div>
+
+<main>
+ <p class="lede">Your settings</p>
+
+ <section class="card" id="ttsCard">
+  <h2>Your Modal — text-to-speech</h2>
+  <p class="hint">Attach your own Modal deployment to run your narration on your
+   own account. Leave it empty to use the shared server (subject to any quota).</p>
+  <div class="status" id="ttsStatus">…</div>
+  <label>Endpoint URL</label>
+  <input id="ttsEndpoint" placeholder="https://your-workspace--rhapsode-tts.modal.run">
+  <label>Modal-Key (token id)</label>
+  <input id="ttsId" autocomplete="off">
+  <label>Modal-Secret (token secret)</label>
+  <input id="ttsSecret" type="password" autocomplete="off" placeholder="write-only">
+  <div class="row">
+   <button class="pri" data-save="tts">Save</button>
+   <button data-test="tts">Test</button>
+   <button data-clear="tts">Clear</button>
+   <span class="msg" id="ttsMsg"></span>
+  </div>
+ </section>
+
+ <section class="card">
+  <h2>Shared-compute usage</h2>
+  <p class="usage" id="usage">…</p>
+ </section>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+async function load(){
+ const d=await (await fetch("/api/account/modal")).json();
+ if(!d.enabled){$("#ttsCard").classList.add("disabled");
+  $("#ttsStatus").textContent="Per-user Modal is not enabled on this server.";return;}
+ const t=d.tts;
+ $("#ttsStatus").className="status "+(t.attached?"on":"off");
+ $("#ttsStatus").textContent=t.attached
+  ?`Attached ✓ — ${t.endpoint} · secret …${t.last4}`:"Not attached — using the shared server.";
+ $("#ttsEndpoint").value=t.endpoint||"";
+ const cap=d.quota&&d.quota.tts_hours;
+ $("#usage").textContent=cap!=null
+  ?`${d.usage.tts_hours} h of ${cap} h on shared compute.`
+  :`${d.usage.tts_hours} h on shared compute (no cap set).`;
+}
+function msg(id,text,ok){const e=$("#"+id);e.textContent=text;
+ e.style.color=ok?"var(--muted)":"var(--error)";}
+document.addEventListener("click",async e=>{
+ const b=e.target;
+ if(b.dataset.save==="tts"){
+  const body={tts:{endpoint:$("#ttsEndpoint").value.trim(),
+   token_id:$("#ttsId").value.trim(),token_secret:$("#ttsSecret").value}};
+  const r=await fetch("/api/account/modal",{method:"PUT",
+   headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  msg("ttsMsg",r.ok?"Saved.":"Could not save.",r.ok);
+  $("#ttsSecret").value="";load();
+ }else if(b.dataset.test==="tts"){
+  msg("ttsMsg","Testing…",true);
+  const r=await (await fetch("/api/account/modal/test",{method:"POST"})).json();
+  msg("ttsMsg",r.ok?"Reached your endpoint ✓":r.error,r.ok);
+ }else if(b.dataset.clear==="tts"){
+  await fetch("/api/account/modal",{method:"DELETE"});
+  $("#ttsEndpoint").value="";$("#ttsId").value="";$("#ttsSecret").value="";
+  msg("ttsMsg","Cleared.",true);load();
+ }
+});
+load();
+</script>
