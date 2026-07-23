@@ -422,7 +422,7 @@ class Worker(threading.Thread):
                     grobid.touch()
 
 
-def create_app(lib, worker, auth_cfg=None, users=None):
+def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
     app = FastAPI(title="Rhapsode")
 
     from fastapi.exceptions import RequestValidationError
@@ -766,6 +766,66 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         return {"users": [{"name": n, "admin": users.is_admin(n),
                            "papers": counts.get(n, 0)} for n in users.names()],
                 "invites": users.open_invites()}
+
+    # -------------------------------------------------- self-service Modal
+    # /api/account/* is ALWAYS "me": the caller, resolved from the session,
+    # never a path parameter. There is deliberately no route that names
+    # another user, so no user can read or write anyone else's profile.
+    def _me(request):
+        who = caller(request)
+        if not multiuser or not who:
+            raise HTTPException(404, "not found")
+        return who
+
+    def _last4(s):
+        return (s or "")[-4:]
+
+    @app.get("/api/account/modal")
+    def account_modal(request: Request):
+        who = _me(request)
+        prof = decrypt_profile(users, who, secret_key) or {}
+        tts, llm = prof.get("tts") or {}, prof.get("llm") or {}
+        # Never the secret: presence, the non-secret endpoint/base_url, and
+        # the last 4 chars of the token as a "which key is this?" hint only.
+        return {
+            "enabled": bool(secret_key),
+            "tts": {"attached": bool(tts),
+                    "endpoint": tts.get("endpoint", ""),
+                    "last4": _last4(tts.get("token_secret"))},
+            "llm": {"attached": bool(llm),
+                    "base_url": llm.get("api_base_url", ""),
+                    "last4": _last4(llm.get("api_key"))},
+            "usage": {"tts_hours": operator_tts_hours(lib, who)},
+            "quota": users.get_quota(who),
+        }
+
+    @app.put("/api/account/modal")
+    def set_account_modal(request: Request, body: dict):
+        who = _me(request)
+        if not secret_key:
+            raise HTTPException(400, "per-user Modal is not enabled on this "
+                                     "server ([secrets] key is unset)")
+        prof = {}
+        tts = body.get("tts") or {}
+        if tts.get("endpoint"):
+            prof["tts"] = {"endpoint": str(tts["endpoint"]),
+                           "token_id": str(tts.get("token_id", "")),
+                           "token_secret": str(tts.get("token_secret", ""))}
+        llm = body.get("llm") or {}
+        if llm.get("api_base_url"):
+            prof["llm"] = {"api_base_url": str(llm["api_base_url"]),
+                           "api_key": str(llm.get("api_key", ""))}
+        if not prof:
+            raise HTTPException(400, "nothing to save")
+        blob = secretbox.encrypt(json.dumps(prof), secret_key, who.encode())
+        users.set_modal_enc(who, blob)
+        return {"ok": True}
+
+    @app.delete("/api/account/modal")
+    def clear_account_modal(request: Request):
+        who = _me(request)
+        users.clear_modal_enc(who)
+        return {"ok": True}
 
     @app.delete("/api/invites/{key}")
     def revoke_invite(key: str, request: Request):
