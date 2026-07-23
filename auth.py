@@ -240,6 +240,40 @@ class Users:
             self.data["users"][name]["epoch"] = secrets.token_hex(8)
             self.save()
 
+    def set_modal_enc(self, name, blob):
+        with self.lock:
+            if name in self.data["users"]:
+                self.data["users"][name]["modal_enc"] = blob
+                self.save()
+
+    def get_modal_enc(self, name):
+        return self.data["users"].get(name, {}).get("modal_enc")
+
+    def clear_modal_enc(self, name):
+        with self.lock:
+            self.data["users"].get(name, {}).pop("modal_enc", None)
+            self.save()
+
+    def has_modal(self, name):
+        return bool(self.get_modal_enc(name))
+
+    def set_quota(self, name, resource, value):
+        with self.lock:
+            u = self.data["users"].get(name)
+            if u is None:
+                return
+            q = u.setdefault("quota", {})
+            if value is None:
+                q.pop(resource, None)
+            else:
+                q[resource] = float(value)
+            if not q:
+                u.pop("quota", None)
+            self.save()
+
+    def get_quota(self, name):
+        return dict(self.data["users"].get(name, {}).get("quota", {}))
+
     def delete(self, name):
         with self.lock:
             if name not in self.data["users"]:
