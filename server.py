@@ -737,6 +737,17 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                                 status_code=500)
         return HTMLResponse(page.read_text())
 
+    def _extraction_label(llm, grobid_cfg):
+        model = (llm.get("model") or "LLM").split("/")[-1]   # drop "google/"
+        base = llm.get("api_base_url") or ""
+        if "modal.run" in base:
+            return f"{model} on Modal"
+        if llm.get("runner") == "ollama":
+            return f"{model} on this machine"
+        if llm.get("runner") == "api":
+            return f"{model} via API"
+        return f"{model} via {llm.get('runner')}"
+
     @app.get("/api/dashboard")
     def dashboard_data(request: Request):
         snap = _scoped(caller(request))
@@ -799,8 +810,8 @@ def create_app(lib, worker, auth_cfg=None, users=None):
                 "voice": f"Kokoro {worker.voice}"
                          + (" on Modal" if tts.get("backend") == "modal"
                             else " on this machine"),
-                "extraction": (f"{llm.get('model') or 'LLM'} via "
-                               f"{llm.get('runner')}") if llm.get("enabled")
+                "extraction": _extraction_label(llm, worker.grobid_cfg)
+                              if llm.get("enabled")
                               else ("GROBID" if (worker.grobid_cfg or {}).get("enabled")
                                     else "built-in heuristics"),
                 "free_gb": round(free_gb, 1) if free_gb is not None else None,

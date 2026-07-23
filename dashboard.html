@@ -177,6 +177,24 @@ main { max-width: 68rem; margin: 0 auto;
   border-radius: 8px; font: .82rem var(--sans); opacity: 0; pointer-events: none;
   transition: opacity .2s ease; z-index: 60; }
 #toast.show { opacity: 1; }
+.newf-btn { margin-left: auto; font: .72rem var(--mono); color: var(--muted);
+  background: none; border: 1px solid var(--hairline); border-radius: 6px;
+  padding: .22rem .6rem; cursor: pointer; }
+.newf-btn:hover { color: var(--ink); border-color: var(--marker); }
+.ctx { position: fixed; z-index: 90; min-width: 196px; max-height: 66vh;
+  overflow-y: auto; background: var(--side); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: 10px; padding: 4px;
+  box-shadow: 0 10px 34px rgba(0,0,0,.28); font: 13px var(--sans); }
+.ctx button { display: flex; justify-content: space-between; align-items: center;
+  gap: 1.2rem; width: 100%; text-align: left; background: none; border: 0;
+  color: inherit; padding: 7px 11px; border-radius: 7px; cursor: pointer;
+  white-space: nowrap; }
+.ctx button:hover:not(:disabled) { background: rgba(0,0,0,.06); }
+@media (prefers-color-scheme: dark) { .ctx button:hover:not(:disabled) { background: rgba(255,255,255,.06); } }
+.ctx button:disabled { color: var(--muted); cursor: default; }
+.ctx button.back { color: var(--muted); }
+.ctx button .arrow { color: var(--muted); }
+.ctx .sep { height: 1px; background: var(--hairline); margin: 4px 6px; }
 .wall { display: grid; gap: clamp(.9rem, 2.4vw, 1.4rem);
   grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
 .tile { position: relative; display: block; }
@@ -442,18 +460,20 @@ function renderFolders() {
     path.map((f, i) => `<span class="sep">\u203A</span>`
       + `<span class="c${i === path.length - 1 ? " cur" : ""}" data-f="${esc(f.id)}">${esc(f.name)}</span>`
     ).join("");
-  const grid = `<div class="fsub"><div class="fgrid">` + subs.map(f => {
+  const grid = subs.length ? `<div class="fsub"><div class="fgrid">` + subs.map(f => {
       const n = f.order.length + childrenOf(f.id).length;
       return `<div class="folder" data-f="${esc(f.id)}" title="${esc(f.name)}">
         <div class="box"><span class="cnt">${n || ""}</span></div>
         <div class="fn">${esc(f.name)}</div></div>`;
-    }).join("") + `<button class="newf" id="newf">+ New folder</button></div></div>`;
+    }).join("") + `</div></div>` : "";
   const label = currentFolder ? "papers here" : "papers not in any folder";
   const papersBlock = `<p class="fhint">${papers.length
-      ? papers.length + " " + label + " \u00b7 drag a paper onto a folder to move it, drop a PDF to add one"
+      ? papers.length + " " + label + " \u00b7 drag onto a folder to move, \u2318-drag to copy, right-click for more"
       : "no " + label}</p>
     <div class="wall fpapers" id="fpapers">${papers.map(paperTile).join("")}</div>`;
-  $("#folders").innerHTML = `<div class="crumb">${crumbs}</div>${grid}${papersBlock}`;
+  $("#folders").innerHTML =
+    `<div class="crumb">${crumbs}<button class="newf-btn" id="newf">\uFF0B New folder</button></div>`
+    + `${grid}${papersBlock}`;
   wireFolders();
 }
 
@@ -486,9 +506,146 @@ function wireFolders() {
       e.preventDefault(); el.classList.remove("drop");
       if (e.dataTransfer.files?.length) return uploadInto(dest, e.dataTransfer.files);
       const pid = e.dataTransfer.getData("text/plain") || dragPid;
-      if (pid) moveInto(pid, dest);
+      if (!pid) return;
+      // hold ⌘/Ctrl/Alt while dropping to copy (a paper in two folders) instead of move
+      if ((e.ctrlKey || e.metaKey || e.altKey) && dest) copyInto(pid, dest);
+      else moveInto(pid, dest);
     });
   }
+
+  // right-click menus
+  $("#fpapers").querySelectorAll(".tile").forEach(t =>
+    t.addEventListener("contextmenu", e => {
+      e.preventDefault(); showMenu(e.clientX, e.clientY, paperMenu(t.dataset.id));
+    }));
+  $("#folders").querySelectorAll(".folder").forEach(f =>
+    f.addEventListener("contextmenu", e => {
+      e.preventDefault(); showMenu(e.clientX, e.clientY, folderMenu(f.dataset.f));
+    }));
+  $("#folders").addEventListener("contextmenu", e => {
+    if (e.target.closest(".tile, .folder, .crumb .c")) return;  // handled above
+    e.preventDefault();
+    showMenu(e.clientX, e.clientY, [{ label: "New folder\u2026", onClick: newFolder }]);
+  });
+}
+
+// ---- context menu engine ----
+function closeMenu() {
+  $("#ctx")?.remove();
+  document.removeEventListener("pointerdown", onDocDown, true);
+}
+function onDocDown(e) { if (!e.target.closest(".ctx")) closeMenu(); }
+function showMenu(x, y, items) {
+  closeMenu();
+  const m = document.createElement("div"); m.className = "ctx"; m.id = "ctx";
+  const stack = [items];
+  const btn = (label, right, cls) => {
+    const b = document.createElement("button");
+    if (cls) b.className = cls;
+    b.innerHTML = `<span>${esc(label)}</span>${right ? `<span class="arrow">${esc(right)}</span>` : ""}`;
+    return b;
+  };
+  function draw() {
+    const list = stack[stack.length - 1];
+    m.innerHTML = "";
+    if (stack.length > 1) {
+      const back = btn("\u2039 Back", "", "back");
+      back.onclick = () => { stack.pop(); draw(); };
+      m.appendChild(back);
+      const s = document.createElement("div"); s.className = "sep"; m.appendChild(s);
+    }
+    for (const it of list) {
+      if (!it) continue;
+      if (it.sep) { const s = document.createElement("div"); s.className = "sep"; m.appendChild(s); continue; }
+      const b = btn(it.label, it.children ? "\u203A" : (it.dim || ""));
+      if (it.disabled) b.disabled = true;
+      else b.onclick = () => {
+        if (it.children) { stack.push(it.children()); draw(); }
+        else { closeMenu(); it.onClick?.(); }
+      };
+      m.appendChild(b);
+    }
+    const r = m.getBoundingClientRect();
+    m.style.left = Math.min(x, innerWidth - r.width - 8) + "px";
+    m.style.top = Math.min(y, innerHeight - r.height - 8) + "px";
+  }
+  document.body.appendChild(m); draw();
+  setTimeout(() => document.addEventListener("pointerdown", onDocDown, true), 0);
+}
+
+// a depth-indented picker of every folder (plus root), for Move to / Copy to
+function folderList(onPick, includeRoot) {
+  const items = includeRoot ? [{ label: "All folders (root)", onClick: () => onPick(null) }] : [];
+  const walk = (parent, depth) => {
+    for (const f of childrenOf(parent).slice().sort((a, b) => a.name.localeCompare(b.name))) {
+      items.push({ label: "\u00a0\u00a0".repeat(depth) + f.name, onClick: () => onPick(f.id) });
+      walk(f.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return items;
+}
+
+function paperMenu(pid) {
+  return [
+    { label: "Open", onClick: () => { location.href = view(pid); } },
+    { sep: true },
+    { label: "Move to", children: () => folderList(dest => moveInto(pid, dest), !!currentFolder) },
+    { label: "Copy to", children: () => folderList(dest => copyInto(pid, dest), false) },
+    currentFolder ? { label: "Remove from this folder", onClick: () => removeFromFolder(pid) } : null,
+  ];
+}
+function folderMenu(plid) {
+  return [
+    { label: "Open", onClick: () => { currentFolder = plid; renderFolders(); } },
+    { sep: true },
+    { label: "New subfolder\u2026", onClick: () => newSubfolder(plid) },
+    { label: "Rename\u2026", onClick: () => renameFolder(plid) },
+    { label: "Delete", onClick: () => deleteFolder(plid) },
+  ];
+}
+
+async function copyInto(pid, dest) {
+  if (!dest) return;
+  try {
+    await fetch(`/api/playlists/${dest}/papers`, { method: "POST", ...jbody({ id: pid }) });
+    toast("Copied into folder"); await reload();
+  } catch { toast("Could not copy that paper"); }
+}
+async function removeFromFolder(pid) {
+  if (!currentFolder) return;
+  try {
+    await fetch(`/api/playlists/${currentFolder}/papers/${encodeURIComponent(pid)}`,
+                { method: "DELETE" });
+    await reload();
+  } catch { toast("Could not remove that paper"); }
+}
+async function newSubfolder(plid) {
+  const name = (prompt("New subfolder name") || "").trim();
+  if (!name || name.includes("/")) return;
+  try { await fetch("/api/playlists", { method: "POST", ...jbody({ name, parent: plid }) }); }
+  catch { toast("Could not create the subfolder"); }
+  await reload();
+}
+async function renameFolder(plid) {
+  const cur = folderById(plid);
+  const name = (prompt("Rename folder", cur?.name || "") || "").trim();
+  if (!name || name === cur?.name || name.includes("/")) return;
+  try { await fetch(`/api/playlists/${plid}`, { method: "PUT", ...jbody({ name }) }); }
+  catch { toast("Could not rename the folder"); }
+  await reload();
+}
+async function deleteFolder(plid) {
+  const f = folderById(plid);
+  if (!f) return;
+  if (f.order.length || childrenOf(plid).length) {
+    toast("Empty the folder first"); return;
+  }
+  if (!confirm(`Delete the folder \u201C${f.name}\u201D?`)) return;
+  try { await fetch(`/api/playlists/${plid}`, { method: "DELETE" }); }
+  catch { toast("Could not delete the folder"); }
+  if (currentFolder === plid) currentFolder = f.parent || null;
+  await reload();
 }
 
 async function moveInto(pid, dest) {
