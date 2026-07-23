@@ -1038,7 +1038,20 @@ def create_app(lib, worker, auth_cfg=None, users=None):
         who = caller(request)
         with lib.lock:
             if body.get("name"):
+                if "/" in str(body["name"]):
+                    raise HTTPException(400, "a folder name cannot contain '/'")
                 pl["name"] = str(body["name"]).strip()
+            if "parent" in body:                     # reparent (drag a folder)
+                new_parent = body["parent"] or None
+                if new_parent:
+                    own_playlist(new_parent, request)   # must own the target
+                    cur = new_parent                    # and no cycle: the
+                    while cur:                          # target must not be
+                        if cur == plid:                 # this folder or below
+                            raise HTTPException(400, "cannot move a folder into "
+                                                     "itself or its own subfolder")
+                        cur = lib.data["playlists"].get(cur, {}).get("parent")
+                pl["parent"] = new_parent
             if "order" in body:
                 if not isinstance(body["order"], list) or \
                         not all(isinstance(x, str) for x in body["order"]):

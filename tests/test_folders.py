@@ -214,6 +214,47 @@ def test_dashboard_tree_includes_empty_folders_with_parent():
     assert parent not in seen and child not in seen
 
 
+
+def test_reparent_a_folder():
+    app, lib = _app()
+    c = TestClient(app)
+    h = _login(c, "alice")
+    a = c.post("/api/playlists", headers=h, json={"name": "A"}).json()["id"]
+    b = c.post("/api/playlists", headers=h, json={"name": "B"}).json()["id"]
+    # move B under A
+    assert c.put(f"/api/playlists/{b}", headers=h, json={"parent": a}).status_code == 200
+    assert lib.data["playlists"][b]["parent"] == a
+    # move B back to root
+    c.put(f"/api/playlists/{b}", headers=h, json={"parent": None})
+    assert lib.data["playlists"][b]["parent"] is None
+
+
+def test_reparent_rejects_a_cycle():
+    app, lib = _app()
+    c = TestClient(app)
+    h = _login(c, "alice")
+    a = c.post("/api/playlists", headers=h, json={"name": "A"}).json()["id"]
+    b = c.post("/api/playlists", headers=h, json={"name": "B", "parent": a}).json()["id"]
+    # A under B would loop (B is A's child)
+    assert c.put(f"/api/playlists/{a}", headers=h, json={"parent": b}).status_code == 400
+    # A under A is also refused
+    assert c.put(f"/api/playlists/{a}", headers=h, json={"parent": a}).status_code == 400
+    assert lib.data["playlists"][a]["parent"] is None
+
+
+def test_cannot_reparent_under_someone_elses_folder():
+    app, lib = _app()
+    c = TestClient(app)
+    mine = c.post("/api/playlists", headers=_login(c, "mallory"),
+                  json={"name": "Mine"}).json()["id"]
+    a = _login(c, "alice")
+    theirs = c.post("/api/playlists", headers=a, json={"name": "Theirs"}).json()["id"]
+    # mallory cannot move her folder under alice's
+    r = c.put(f"/api/playlists/{mine}", headers=_login(c, "mallory"),
+              json={"parent": theirs})
+    assert r.status_code == 404
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

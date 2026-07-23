@@ -167,6 +167,12 @@ main { max-width: 68rem; margin: 0 auto;
 .newf:hover { color: var(--ink); border-color: var(--marker); }
 .fpapers .tile { cursor: grab; }
 .fpapers .tile.dragging { opacity: .4; }
+.fpapers .tile.sel .frame { outline: 2px solid var(--marker); outline-offset: 2px; }
+.fpapers .tile.cut .frame { opacity: .45; }
+.folder[draggable="true"] { cursor: grab; }
+/* the Ungrouped virtual folder: a lighter, dashed tab so it reads as "loose" */
+.folder.ung .box { background: none; border-style: dashed; }
+.folder.ung .box::before { background: var(--desk); border-style: dashed; }
 .fhint { font: .74rem var(--mono); color: var(--muted); margin: 0 0 .9rem; }
 #folders[hidden] { display: none; }
 /* .wall sets display:grid, which beats the UA [hidden] rule, so the
@@ -388,6 +394,10 @@ const FILTERS = [
 let activeFilter = "all";
 let PLAYLISTS = [], SHELF = [], BYID = {};
 let currentFolder = null;              // folder browser location: plid or null
+const UNGROUPED = "__ungrouped__";     // a virtual folder of papers in no folder
+let clip = null;                       // { pid, mode: "cut"|"copy", from }
+let selectedPid = null;
+const realCurrent = () => (currentFolder && currentFolder !== UNGROUPED) ? currentFolder : null;
 
 const jbody = o => ({ headers: { "Content-Type": "application/json" },
                       body: JSON.stringify(o) });
@@ -452,51 +462,77 @@ function unfiled() {
 }
 
 function renderFolders() {
-  const path = folderPath(currentFolder);
-  const subs = childrenOf(currentFolder);
-  const papers = currentFolder ? papersOf(currentFolder) : unfiled();
+  const ung = currentFolder === UNGROUPED;
+  const loose = unfiled();
+  const path = ung ? [] : folderPath(currentFolder);
+  const subs = ung ? [] : childrenOf(currentFolder);
+  const papers = ung ? loose : (currentFolder ? papersOf(currentFolder) : []);
+
   const crumbs =
-    `<span class="c${currentFolder ? "" : " cur"}" data-f="">All folders</span>` +
-    path.map((f, i) => `<span class="sep">\u203A</span>`
-      + `<span class="c${i === path.length - 1 ? " cur" : ""}" data-f="${esc(f.id)}">${esc(f.name)}</span>`
-    ).join("");
-  const grid = subs.length ? `<div class="fsub"><div class="fgrid">` + subs.map(f => {
-      const n = f.order.length + childrenOf(f.id).length;
-      return `<div class="folder" data-f="${esc(f.id)}" title="${esc(f.name)}">
-        <div class="box"><span class="cnt">${n || ""}</span></div>
-        <div class="fn">${esc(f.name)}</div></div>`;
-    }).join("") + `</div></div>` : "";
-  const label = currentFolder ? "papers here" : "papers not in any folder";
-  const papersBlock = `<p class="fhint">${papers.length
-      ? papers.length + " " + label + " \u00b7 drag onto a folder to move, \u2318-drag to copy, right-click for more"
-      : "no " + label}</p>
-    <div class="wall fpapers" id="fpapers">${papers.map(paperTile).join("")}</div>`;
-  $("#folders").innerHTML =
-    `<div class="crumb">${crumbs}<button class="newf-btn" id="newf">\uFF0B New folder</button></div>`
-    + `${grid}${papersBlock}`;
+    `<span class="c${(!currentFolder) ? " cur" : ""}" data-f="">All folders</span>` +
+    (ung
+      ? `<span class="sep">\u203A</span><span class="c cur" data-f="${UNGROUPED}">Ungrouped</span>`
+      : path.map((f, i) => `<span class="sep">\u203A</span>`
+          + `<span class="c${i === path.length - 1 ? " cur" : ""}" data-f="${esc(f.id)}">${esc(f.name)}</span>`
+        ).join(""));
+
+  const folderCell = f => `<div class="folder" data-f="${esc(f.id)}" draggable="true" title="${esc(f.name)}">
+      <div class="box"><span class="cnt">${(f.order.length + childrenOf(f.id).length) || ""}</span></div>
+      <div class="fn">${esc(f.name)}</div></div>`;
+  const ungCell = (!currentFolder && loose.length)
+    ? `<div class="folder ung" data-f="${UNGROUPED}" title="Papers in no folder">
+         <div class="box"><span class="cnt">${loose.length}</span></div>
+         <div class="fn">Ungrouped</div></div>` : "";
+  const cells = subs.map(folderCell).join("") + ungCell;
+  const grid = cells ? `<div class="fsub"><div class="fgrid">${cells}</div></div>` : "";
+
+  const hint = papers.length
+    ? `${papers.length} paper${papers.length === 1 ? "" : "s"}${currentFolder && !ung ? " here" : ""}`
+      + ` \u00b7 drag onto a folder to move, \u2318-drag to copy, click to select, right-click for more`
+    : (ung ? "no papers here" : (currentFolder ? "no papers here" : ""));
+  const papersBlock = `<p class="fhint">${hint}</p>`
+    + `<div class="wall fpapers" id="fpapers">${papers.map(paperTile).join("")}</div>`;
+
+  const newfBtn = ung ? "" : `<button class="newf-btn" id="newf">\uFF0B New folder</button>`;
+  $("#folders").innerHTML = `<div class="crumb">${crumbs}${newfBtn}</div>${grid}${papersBlock}`;
   wireFolders();
 }
 
-const paperTile = p => tileHTML(p).replace('<a class="tile"', '<a class="tile" draggable="true"');
+const paperTile = p => tileHTML(p)
+  .replace('<a class="tile"', `<a class="tile${p.id === selectedPid ? " sel" : ""}${clip && clip.mode === "cut" && clip.pid === p.id ? " cut" : ""}" draggable="true"`);
 
 function wireFolders() {
   $("#folders").querySelectorAll(".crumb .c").forEach(c =>
-    c.addEventListener("click", () => { currentFolder = c.dataset.f || null; renderFolders(); }));
-  $("#folders").querySelectorAll(".folder").forEach(f =>
-    f.addEventListener("click", () => { currentFolder = f.dataset.f; renderFolders(); }));
+    c.addEventListener("click", () => { currentFolder = c.dataset.f || null; selectedPid = null; renderFolders(); }));
+  $("#folders").querySelectorAll(".folder").forEach(f => {
+    f.addEventListener("click", () => { currentFolder = f.dataset.f; selectedPid = null; renderFolders(); });
+    if (f.dataset.f !== UNGROUPED) {          // real folders drag to reparent
+      f.addEventListener("dragstart", e => {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", "folder:" + f.dataset.f);
+      });
+    }
+  });
   $("#newf")?.addEventListener("click", newFolder);
   wirePeek($("#fpapers"));
 
-  let dragPid = null;
+  // paper tiles: single-click selects, double-click opens, drag to move
   $("#fpapers").querySelectorAll(".tile").forEach(t => {
+    t.addEventListener("click", e => { e.preventDefault(); select(t.dataset.id); });
+    t.addEventListener("dblclick", e => { e.preventDefault(); location.href = view(t.dataset.id); });
     t.addEventListener("dragstart", e => {
-      dragPid = t.dataset.id; t.classList.add("dragging");
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", t.dataset.id);
+      select(t.dataset.id); t.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "copyMove";
+      e.dataTransfer.setData("text/plain", "paper:" + t.dataset.id);
     });
-    t.addEventListener("dragend", () => { dragPid = null; t.classList.remove("dragging"); });
+    t.addEventListener("dragend", () => t.classList.remove("dragging"));
+    t.addEventListener("contextmenu", e => {
+      e.preventDefault(); select(t.dataset.id);
+      showMenu(e.clientX, e.clientY, paperMenu(t.dataset.id));
+    });
   });
 
+  // drop targets: folder tiles (incl. Ungrouped), and breadcrumb crumbs
   const targets = [...$("#folders").querySelectorAll(".folder")].map(el => [el, el.dataset.f])
     .concat([...$("#folders").querySelectorAll(".crumb .c")].map(el => [el, el.dataset.f || null]));
   for (const [el, dest] of targets) {
@@ -504,29 +540,37 @@ function wireFolders() {
     el.addEventListener("dragleave", () => el.classList.remove("drop"));
     el.addEventListener("drop", async e => {
       e.preventDefault(); el.classList.remove("drop");
-      if (e.dataTransfer.files?.length) return uploadInto(dest, e.dataTransfer.files);
-      const pid = e.dataTransfer.getData("text/plain") || dragPid;
+      if (e.dataTransfer.files?.length) {
+        if (dest !== UNGROUPED) uploadInto(dest, e.dataTransfer.files);
+        return;
+      }
+      const data = e.dataTransfer.getData("text/plain") || "";
+      if (data.startsWith("folder:")) return reparentFolder(data.slice(7), dest);
+      const pid = data.replace(/^paper:/, "");
       if (!pid) return;
-      // hold ⌘/Ctrl/Alt while dropping to copy (a paper in two folders) instead of move
-      if ((e.ctrlKey || e.metaKey || e.altKey) && dest) copyInto(pid, dest);
+      if (dest === UNGROUPED) unfileEverywhere(pid);
+      else if ((e.ctrlKey || e.metaKey || e.altKey) && dest) copyInto(pid, dest);
       else moveInto(pid, dest);
     });
   }
 
-  // right-click menus
-  $("#fpapers").querySelectorAll(".tile").forEach(t =>
-    t.addEventListener("contextmenu", e => {
-      e.preventDefault(); showMenu(e.clientX, e.clientY, paperMenu(t.dataset.id));
-    }));
+  // right-click a folder / empty space
   $("#folders").querySelectorAll(".folder").forEach(f =>
     f.addEventListener("contextmenu", e => {
+      if (f.dataset.f === UNGROUPED) return;         // virtual: no menu
       e.preventDefault(); showMenu(e.clientX, e.clientY, folderMenu(f.dataset.f));
     }));
   $("#folders").addEventListener("contextmenu", e => {
-    if (e.target.closest(".tile, .folder, .crumb .c")) return;  // handled above
+    if (e.target.closest(".tile, .folder, .crumb .c")) return;
     e.preventDefault();
     showMenu(e.clientX, e.clientY, [{ label: "New folder\u2026", onClick: newFolder }]);
   });
+}
+
+function select(pid) {
+  selectedPid = pid;
+  $("#fpapers")?.querySelectorAll(".tile").forEach(t =>
+    t.classList.toggle("sel", t.dataset.id === pid));
 }
 
 // ---- context menu engine ----
@@ -574,8 +618,9 @@ function showMenu(x, y, items) {
 }
 
 // a depth-indented picker of every folder (plus root), for Move to / Copy to
-function folderList(onPick, includeRoot) {
-  const items = includeRoot ? [{ label: "All folders (root)", onClick: () => onPick(null) }] : [];
+function folderList(onPick, { ungrouped } = {}) {
+  const items = ungrouped
+    ? [{ label: "Ungrouped (no folder)", onClick: () => onPick(UNGROUPED) }] : [];
   const walk = (parent, depth) => {
     for (const f of childrenOf(parent).slice().sort((a, b) => a.name.localeCompare(b.name))) {
       items.push({ label: "\u00a0\u00a0".repeat(depth) + f.name, onClick: () => onPick(f.id) });
@@ -590,8 +635,8 @@ function paperMenu(pid) {
   return [
     { label: "Open", onClick: () => { location.href = view(pid); } },
     { sep: true },
-    { label: "Move to", children: () => folderList(dest => moveInto(pid, dest), !!currentFolder) },
-    { label: "Copy to", children: () => folderList(dest => copyInto(pid, dest), false) },
+    { label: "Move to", children: () => folderList(dest => moveInto(pid, dest), { ungrouped: true }) },
+    { label: "Copy to", children: () => folderList(dest => copyInto(pid, dest)) },
     currentFolder ? { label: "Remove from this folder", onClick: () => removeFromFolder(pid) } : null,
   ];
 }
@@ -648,14 +693,47 @@ async function deleteFolder(plid) {
   await reload();
 }
 
-async function moveInto(pid, dest) {
+const moveInto = (pid, dest) => moveExplicit(pid, realCurrent(), dest);
+
+async function moveExplicit(pid, src, dest) {
+  if (dest === UNGROUPED) return unfileEverywhere(pid);
   try {
     if (dest) await fetch(`/api/playlists/${dest}/papers`, { method: "POST", ...jbody({ id: pid }) });
-    if (currentFolder && currentFolder !== dest)
-      await fetch(`/api/playlists/${currentFolder}/papers/${encodeURIComponent(pid)}`,
-                  { method: "DELETE" });
+    if (src && src !== dest)
+      await fetch(`/api/playlists/${src}/papers/${encodeURIComponent(pid)}`, { method: "DELETE" });
     await reload();
   } catch { toast("Could not move that paper"); }
+}
+
+async function unfileEverywhere(pid) {
+  const inFolders = PLAYLISTS.filter(p => p.order.includes(pid));
+  try {
+    for (const f of inFolders)
+      await fetch(`/api/playlists/${f.id}/papers/${encodeURIComponent(pid)}`, { method: "DELETE" });
+    await reload();
+  } catch { toast("Could not ungroup that paper"); }
+}
+
+async function reparentFolder(plid, dest) {
+  if (dest === UNGROUPED || dest === plid) return;
+  for (let cur = dest; cur; cur = folderById(cur)?.parent || null)
+    if (cur === plid) { toast("Can't move a folder into its own subfolder"); return; }
+  try { await fetch(`/api/playlists/${plid}`, { method: "PUT", ...jbody({ parent: dest || null }) }); }
+  catch { toast("Could not move the folder"); }
+  await reload();
+}
+
+async function pasteHere() {
+  if (!clip) return;
+  if (clip.mode === "copy") {
+    const dest = realCurrent();
+    if (!dest) { toast("Open a folder to paste a copy into"); return; }
+    await copyInto(clip.pid, dest);
+  } else {
+    await moveExplicit(clip.pid, clip.from,
+                       currentFolder === UNGROUPED ? UNGROUPED : realCurrent());
+  }
+  clip = null;
 }
 async function uploadInto(dest, files) {
   let n = 0;
@@ -728,5 +806,24 @@ async function load() {
     if (e === "401") location.href = "/login";
   }
 }
+// keyboard clipboard, only in the folder browser
+document.addEventListener("keydown", e => {
+  if (activeFilter !== "folders") return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")) return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === "c" && selectedPid) {
+    clip = { pid: selectedPid, mode: "copy" }; toast("Copied \u2014 open a folder and paste"); e.preventDefault();
+  } else if (mod && e.key === "x" && selectedPid) {
+    clip = { pid: selectedPid, mode: "cut", from: realCurrent() };
+    toast("Cut \u2014 open a folder and paste"); renderFolders(); e.preventDefault();
+  } else if (mod && e.key === "v" && clip) {
+    pasteHere(); e.preventDefault();
+  } else if (e.key === "Escape") {
+    clip = null; selectedPid = null; renderFolders();
+  } else if (e.key === "Enter" && selectedPid) {
+    location.href = view(selectedPid);
+  }
+});
+
 load();
 </script>
