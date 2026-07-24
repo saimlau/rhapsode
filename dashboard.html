@@ -195,6 +195,15 @@ main { max-width: 68rem; margin: 0 auto;
   border-radius: 8px; font: .82rem var(--sans); opacity: 0; pointer-events: none;
   transition: opacity .2s ease; z-index: 60; }
 #toast.show { opacity: 1; }
+/* whole-page drop-to-upload hint. pointer-events:none so it never intercepts a
+   drop onto a specific folder tile — it's purely the visual cue. */
+#dropov { position: fixed; inset: 0; z-index: 80; display: none;
+  place-items: center; pointer-events: none;
+  background: color-mix(in srgb, var(--desk) 62%, transparent); }
+#dropov.show { display: grid; }
+#dropov .inner { font: 600 1rem var(--sans); color: var(--marker);
+  border: 3px dashed var(--marker); border-radius: 16px; padding: 2rem 3rem;
+  background: var(--desk); }
 .newf-btn { margin-left: auto; font: .72rem var(--mono); color: var(--muted);
   background: none; border: 1px solid var(--hairline); border-radius: 6px;
   padding: .22rem .6rem; cursor: pointer; }
@@ -298,6 +307,7 @@ main { max-width: 68rem; margin: 0 auto;
   <div class="strip" id="strip"></div>
 </main>
 <div id="toast"></div>
+<div id="dropov"><div class="inner">Drop PDFs to add</div></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -622,9 +632,12 @@ function wireFolders() {
     el.addEventListener("dragover", e => { e.preventDefault(); el.classList.add("drop"); });
     el.addEventListener("dragleave", () => el.classList.remove("drop"));
     el.addEventListener("drop", async e => {
-      e.preventDefault(); el.classList.remove("drop");
+      e.preventDefault(); e.stopPropagation();   // don't also fire the page dropzone
+      el.classList.remove("drop");
       if (e.dataTransfer.files?.length) {
-        if (dest !== UNGROUPED) uploadInto(dest, e.dataTransfer.files);
+        // drop onto a real folder files it there; onto Ungrouped adds it to
+        // the library with no folder
+        uploadInto(dest === UNGROUPED ? null : dest, e.dataTransfer.files);
         return;
       }
       const data = e.dataTransfer.getData("text/plain") || "";
@@ -933,6 +946,27 @@ document.addEventListener("keydown", e => {
   } else if (e.key === "Enter" && selected.size) {
     location.href = view(selList()[0]);
   }
+});
+
+// whole-page drop-to-upload: drop a PDF anywhere to add it — into the folder
+// you're viewing, else the library. Folder-tile drops file into that folder
+// (they stopPropagation, so this handles only the "dropped elsewhere" case).
+// Without this the browser just opens the dropped file.
+const hasFiles = e => Array.from(e.dataTransfer?.types || []).includes("Files");
+const dropDest = () => viewMode === "folders" ? realCurrent() : null;
+let dragDepth = 0;
+addEventListener("dragenter", e => {
+  if (hasFiles(e)) { dragDepth++; $("#dropov").classList.add("show"); }
+});
+addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener("dragleave", e => {
+  if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; $("#dropov").classList.remove("show"); }
+});
+addEventListener("drop", e => {
+  if (!hasFiles(e)) return;               // internal paper moves are wired on the tiles
+  e.preventDefault();
+  dragDepth = 0; $("#dropov").classList.remove("show");
+  uploadInto(dropDest(), e.dataTransfer.files);
 });
 
 load();
