@@ -59,3 +59,42 @@ def test_probe_error_is_generic(monkeypatch):
     r = c.post("/api/account/modal/test", headers=h).json()
     assert r["ok"] is False
     assert "s-SEEKRIT" not in r["error"]      # never echo the token
+
+
+def test_llm_probe_ok(monkeypatch):
+    app, lib = _app()
+    c = TestClient(app)
+    h = _login(c)
+    c.put("/api/account/modal", headers=h, json={
+        "llm": {"api_base_url": "https://bob-llm.modal.run/v1", "api_key": "k"}})
+    import requests
+
+    class _R:
+        def raise_for_status(self):
+            pass
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _R())
+    r = c.post("/api/account/modal/test?group=llm", headers=h).json()
+    assert r["ok"] is True
+
+
+def test_llm_probe_error_is_generic(monkeypatch):
+    app, lib = _app()
+    c = TestClient(app)
+    h = _login(c)
+    c.put("/api/account/modal", headers=h, json={
+        "llm": {"api_base_url": "https://bob-llm.modal.run/v1", "api_key": "sk-SEEKRIT"}})
+    import requests
+
+    def boom(*a, **k):
+        raise RuntimeError("401 unauthorized for key sk-SEEKRIT")
+    monkeypatch.setattr(requests, "get", boom)
+    r = c.post("/api/account/modal/test?group=llm", headers=h).json()
+    assert r["ok"] is False
+    assert "sk-SEEKRIT" not in r["error"]      # never echo the key
+
+
+def test_llm_probe_400_when_not_attached():
+    app, lib = _app()
+    c = TestClient(app)
+    r = c.post("/api/account/modal/test?group=llm", headers=_login(c))
+    assert r.status_code == 400

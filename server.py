@@ -841,32 +841,66 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         if not secret_key:
             raise HTTPException(400, "per-user Modal is not enabled on this "
                                      "server ([secrets] key is unset)")
-        prof = {}
-        tts = body.get("tts") or {}
-        if tts.get("endpoint"):
+        # MERGE into the existing profile: the TTS and LLM forms save
+        # independently, so writing one group must never wipe the other. Use
+        # DELETE ?group=... to remove a group.
+        prof = decrypt_profile(users, who, secret_key) or {}
+        changed = False
+        tts = body.get("tts")
+        if isinstance(tts, dict) and tts.get("endpoint"):
             prof["tts"] = {"endpoint": str(tts["endpoint"]),
                            "token_id": str(tts.get("token_id", "")),
                            "token_secret": str(tts.get("token_secret", ""))}
-        llm = body.get("llm") or {}
-        if llm.get("api_base_url"):
+            changed = True
+        llm = body.get("llm")
+        if isinstance(llm, dict) and llm.get("api_base_url"):
             prof["llm"] = {"api_base_url": str(llm["api_base_url"]),
                            "api_key": str(llm.get("api_key", ""))}
-        if not prof:
+            changed = True
+        if not changed:
             raise HTTPException(400, "nothing to save")
         blob = secretbox.encrypt(json.dumps(prof), secret_key, who.encode())
         users.set_modal_enc(who, blob)
         return {"ok": True}
 
     @app.delete("/api/account/modal")
-    def clear_account_modal(request: Request):
+    def clear_account_modal(request: Request, group: str = ""):
         who = _me(request)
-        users.clear_modal_enc(who)
+        # ?group=tts|llm clears just that credential (keeping the other);
+        # no group clears the whole profile.
+        if group in ("tts", "llm") and secret_key:
+            prof = decrypt_profile(users, who, secret_key) or {}
+            prof.pop(group, None)
+            if prof:
+                users.set_modal_enc(who, secretbox.encrypt(
+                    json.dumps(prof), secret_key, who.encode()))
+            else:
+                users.clear_modal_enc(who)
+        else:
+            users.clear_modal_enc(who)
         return {"ok": True}
 
     @app.post("/api/account/modal/test")
-    def test_account_modal(request: Request):
+    def test_account_modal(request: Request, group: str = "tts"):
         who = _me(request)
         prof = decrypt_profile(users, who, secret_key) or {}
+        if group == "llm":
+            llm = prof.get("llm")
+            if not llm:
+                raise HTTPException(400, "no LLM endpoint attached")
+            # a free auth/reachability probe of the caller's OWN endpoint:
+            # GET {base}/models (the OpenAI-compatible discovery route)
+            try:
+                import requests
+                base = str(llm["api_base_url"]).rstrip("/")
+                r = requests.get(base + "/models", timeout=15, headers={
+                    "Authorization": f"Bearer {llm.get('api_key', '')}"})
+                r.raise_for_status()
+                return {"ok": True}
+            except Exception:
+                return {"ok": False,
+                        "error": "Could not reach your LLM endpoint. Check the "
+                                 "base URL and API key in your settings."}
         tts = prof.get("tts")
         if not tts:
             raise HTTPException(400, "no Modal TTS endpoint attached")

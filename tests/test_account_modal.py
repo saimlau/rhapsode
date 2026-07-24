@@ -72,3 +72,51 @@ def test_a_user_cannot_touch_another_users_profile():
     # mallory's GET reflects mallory, never bob
     body = c.get("/api/account/modal", headers=_login(c, "mallory")).json()
     assert body["tts"]["attached"] is False
+
+
+def test_saving_llm_does_not_wipe_tts_and_vice_versa():
+    """The two forms save independently — PUT merges, it does not replace."""
+    app, lib, users = _app()
+    c = TestClient(app)
+    h = _login(c, "bob")
+    c.put("/api/account/modal", headers=h, json={
+        "tts": {"endpoint": "https://bob.modal.run",
+                "token_id": "i", "token_secret": "s"}})
+    c.put("/api/account/modal", headers=h, json={
+        "llm": {"api_base_url": "https://bob-llm.modal.run/v1", "api_key": "sk-KEY-4242"}})
+    body = c.get("/api/account/modal", headers=h).json()
+    assert body["tts"]["attached"] is True, "the LLM save must not wipe TTS"
+    assert body["llm"]["attached"] is True
+    assert body["llm"]["base_url"] == "https://bob-llm.modal.run/v1"
+    assert body["llm"]["last4"] == "4242"
+    # neither secret is ever returned
+    import json as _j
+    assert "sk-KEY-4242" not in _j.dumps(body)
+
+
+def test_clearing_one_group_keeps_the_other():
+    app, lib, users = _app()
+    c = TestClient(app)
+    h = _login(c, "bob")
+    c.put("/api/account/modal", headers=h, json={
+        "tts": {"endpoint": "https://bob.modal.run", "token_id": "i", "token_secret": "s"}})
+    c.put("/api/account/modal", headers=h, json={
+        "llm": {"api_base_url": "https://bob-llm.modal.run/v1", "api_key": "k"}})
+    c.delete("/api/account/modal", headers=h, params={"group": "tts"})
+    body = c.get("/api/account/modal", headers=h).json()
+    assert body["tts"]["attached"] is False, "only TTS was cleared"
+    assert body["llm"]["attached"] is True, "LLM survives a scoped TTS clear"
+    # clearing the last remaining group drops the whole blob
+    c.delete("/api/account/modal", headers=h, params={"group": "llm"})
+    assert users.get_modal_enc("bob") is None
+
+
+def test_llm_save_alone_then_get():
+    app, lib, users = _app()
+    c = TestClient(app)
+    h = _login(c, "bob")
+    r = c.put("/api/account/modal", headers=h, json={
+        "llm": {"api_base_url": "https://bob-llm.modal.run/v1", "api_key": "sk-9"}})
+    assert r.status_code == 200
+    body = c.get("/api/account/modal", headers=h).json()
+    assert body["llm"]["attached"] is True and body["tts"]["attached"] is False

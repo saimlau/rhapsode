@@ -65,6 +65,24 @@ button.pri{background:var(--marker);color:#201a05;font-weight:600}
   </div>
  </section>
 
+ <section class="card" id="llmCard">
+  <h2>Your LLM — text extraction</h2>
+  <p class="hint">Attach your own OpenAI-compatible endpoint (your Modal
+   deployment, or a provider API key) to run extraction on your own account.
+   Leave it empty to use the shared server.</p>
+  <div class="status" id="llmStatus">…</div>
+  <label>Base URL</label>
+  <input id="llmBase" placeholder="https://your-workspace--rhapsode-llm.modal.run/v1">
+  <label>API key</label>
+  <input id="llmKey" type="password" autocomplete="off" placeholder="write-only">
+  <div class="row">
+   <button class="pri" data-save="llm">Save</button>
+   <button data-test="llm">Test</button>
+   <button data-clear="llm">Clear</button>
+   <span class="msg" id="llmMsg"></span>
+  </div>
+ </section>
+
  <section class="card">
   <h2>Shared-compute usage</h2>
   <p class="usage" id="usage">…</p>
@@ -75,13 +93,20 @@ button.pri{background:var(--marker);color:#201a05;font-weight:600}
 const $=s=>document.querySelector(s);
 async function load(){
  const d=await (await fetch("/api/account/modal")).json();
- if(!d.enabled){$("#ttsCard").classList.add("disabled");
-  $("#ttsStatus").textContent="Per-user Modal is not enabled on this server.";return;}
+ if(!d.enabled){
+  $("#ttsCard").classList.add("disabled");$("#llmCard").classList.add("disabled");
+  $("#ttsStatus").textContent=$("#llmStatus").textContent=
+   "Per-user credentials are not enabled on this server.";return;}
  const t=d.tts;
  $("#ttsStatus").className="status "+(t.attached?"on":"off");
  $("#ttsStatus").textContent=t.attached
   ?`Attached ✓ — ${t.endpoint} · secret …${t.last4}`:"Not attached — using the shared server.";
  $("#ttsEndpoint").value=t.endpoint||"";
+ const l=d.llm;
+ $("#llmStatus").className="status "+(l.attached?"on":"off");
+ $("#llmStatus").textContent=l.attached
+  ?`Attached ✓ — ${l.base_url} · key …${l.last4}`:"Not attached — using the shared server.";
+ $("#llmBase").value=l.base_url||"";
  const cap=d.quota&&d.quota.tts_hours;
  $("#usage").textContent=cap!=null
   ?`${d.usage.tts_hours} h of ${cap} h on shared compute.`
@@ -100,12 +125,26 @@ document.addEventListener("click",async e=>{
   $("#ttsSecret").value="";load();
  }else if(b.dataset.test==="tts"){
   msg("ttsMsg","Testing…",true);
-  const r=await (await fetch("/api/account/modal/test",{method:"POST"})).json();
+  const r=await (await fetch("/api/account/modal/test?group=tts",{method:"POST"})).json();
   msg("ttsMsg",r.ok?"Reached your endpoint ✓":r.error,r.ok);
  }else if(b.dataset.clear==="tts"){
-  await fetch("/api/account/modal",{method:"DELETE"});
+  await fetch("/api/account/modal?group=tts",{method:"DELETE"});
   $("#ttsEndpoint").value="";$("#ttsId").value="";$("#ttsSecret").value="";
   msg("ttsMsg","Cleared.",true);load();
+ }else if(b.dataset.save==="llm"){
+  const body={llm:{api_base_url:$("#llmBase").value.trim(),api_key:$("#llmKey").value}};
+  const r=await fetch("/api/account/modal",{method:"PUT",
+   headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  msg("llmMsg",r.ok?"Saved.":"Could not save.",r.ok);
+  $("#llmKey").value="";load();
+ }else if(b.dataset.test==="llm"){
+  msg("llmMsg","Testing…",true);
+  const r=await (await fetch("/api/account/modal/test?group=llm",{method:"POST"})).json();
+  msg("llmMsg",r.ok?"Reached your endpoint ✓":r.error,r.ok);
+ }else if(b.dataset.clear==="llm"){
+  await fetch("/api/account/modal?group=llm",{method:"DELETE"});
+  $("#llmBase").value="";$("#llmKey").value="";
+  msg("llmMsg","Cleared.",true);load();
  }
 });
 load();
