@@ -54,6 +54,28 @@ def test_fetch_style_404_stays_json():
     assert "application/json" in r.headers["content-type"]
 
 
+def test_html_404_propagates_through_the_auth_gate():
+    """With a password set, the login middleware is active; a 404 raised by the
+    router must still reach the exception handler (BaseHTTPMiddleware can eat
+    exceptions if the stack is wrong) — verify an authenticated miss is HTML."""
+    root = Path(tempfile.mkdtemp())
+    lib = server.Library(root)
+    worker = server.Worker(lib, "af_heart", 1.0, 150)
+    users = auth.Users(root)
+    users.create("admin", None, admin=True, pw_hash=auth.hash_password("adminpw is long"))
+    app = server.create_app(lib, worker,
+                            {"multiuser": True, "password_hash": auth.hash_password("x")},
+                            users)
+    c = TestClient(app)
+    r = c.post("/login", data={"username": "admin", "password": "adminpw is long"},
+               follow_redirects=False)
+    h = {"Cookie": f"{auth.COOKIE}={r.cookies[auth.COOKIE]}", **HTML}
+    resp = c.get("/no-such-page", headers=h)
+    assert resp.status_code == 404
+    assert "text/html" in resp.headers["content-type"]
+    assert "library" in resp.text.lower()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
