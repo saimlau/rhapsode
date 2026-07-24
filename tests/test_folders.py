@@ -155,6 +155,20 @@ def test_create_subfolder_under_an_owned_folder():
                   json={"name": "a / b", "parent": parent}).status_code == 400
 
 
+def test_root_folder_creation_is_idempotent():
+    """The Zotero plugin sends papers with playlist="ME 326" (which creates the
+    folder), then posts ensurePlaylist("ME 326"). Both must resolve to the SAME
+    folder — otherwise ensurePlaylist spawns an empty duplicate."""
+    app, lib = _app()
+    c = TestClient(app)
+    h = _login(c, "alice")
+    a = c.post("/api/playlists", headers=h, json={"name": "ME 326"}).json()["id"]
+    b = c.post("/api/playlists", headers=h, json={"name": "ME 326"}).json()["id"]
+    assert a == b, "a repeated root name must not create a second folder"
+    assert sum(1 for p in lib.data["playlists"].values()
+               if p["name"] == "ME 326") == 1, "no empty duplicate"
+
+
 def test_slashed_name_with_no_parent_resolves_into_the_tree():
     """The Zotero plugin POSTs a full 'Grandparent / Parent / Child' path (no
     explicit parent) to ensure the folders exist; it must resolve into the tree,

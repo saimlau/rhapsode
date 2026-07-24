@@ -1382,13 +1382,12 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
                 raise HTTPException(400, "a folder name cannot contain '/'")
             own_playlist(parent, request)
             return {"id": lib.create_folder(name, owner=who, parent=parent)}
-        if "/" in name:
-            # a slashed PATH with no explicit parent (the Zotero plugin's
-            # "Grandparent / Parent / Child"): resolve it into the folder tree,
-            # find-or-create each level. Idempotent, so re-sending never
-            # duplicates a folder.
-            return {"id": lib.playlist_by_name(name, owner=who)}
-        return {"id": lib.create_folder(name, owner=who, parent=None)}
+        # no explicit parent: resolve the name as a path, find-or-create each
+        # level. This covers the UI's root New-folder AND the plugin's slashed
+        # "Grandparent / Parent / Child" — and is idempotent, so the plugin's
+        # ensurePlaylist (posted after the papers) returns the SAME folder the
+        # paper sends created, instead of spawning an empty duplicate.
+        return {"id": lib.playlist_by_name(name, owner=who)}
 
     @app.put("/api/playlists/{plid}")
     def update_playlist(plid: str, request: Request, body: dict):
