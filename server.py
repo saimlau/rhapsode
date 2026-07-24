@@ -434,6 +434,26 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         # serializer (json.dumps(allow_nan=False)) into a 500. Return a fixed
         # 400 that never re-serializes attacker input.
         return JSONResponse({"detail": "invalid request body"}, status_code=400)
+
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exc(request, exc):
+        # A browser navigating to a missing OR access-gated page (e.g. /admin
+        # with accounts off) should see a friendly page, not raw JSON. This
+        # also catches unmatched routes (Starlette raises a 404 here). API and
+        # fetch callers still get JSON, so the frontend and tests are unchanged.
+        # The 404 message is deliberately generic: it must not reveal whether a
+        # page exists-but-forbidden versus does-not-exist (the isolation rule).
+        wants_html = "text/html" in request.headers.get("accept", "")
+        if (exc.status_code == 404 and wants_html
+                and not request.url.path.startswith("/api/")):
+            page = REPO / "notfound.html"
+            body = page.read_text() if page.is_file() else "<h1>Not found</h1>"
+            return HTMLResponse(body, status_code=404)
+        # default behaviour for every other case (status, JSON detail, headers)
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
+                            headers=getattr(exc, "headers", None))
     auth_cfg = auth_cfg or {}
     secret = auth.load_secret(lib.root)
     multiuser = users is not None

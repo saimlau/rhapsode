@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rhapsode · not found</title>
+<style>
+:root{
+  --desk:#ECEAE6; --side:#E6E3DC; --ink:#2A2721; --muted:#8A857A;
+  --hairline:rgba(40,33,20,.14); --marker:#F5B301; --marker-wash:rgba(245,179,1,.18);
+  --serif:"New York","Iowan Old Style",Georgia,serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --desk:#1B1A18; --side:#22211E; --ink:#E6E2D8; --muted:#8E8A80;
+  --hairline:rgba(255,250,235,.13); --marker-wash:rgba(245,179,1,.14);
+}}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--desk);color:var(--ink);font-family:var(--sans);
+  display:flex;flex-direction:column;min-height:100vh}
+.bar{display:flex;align-items:baseline;gap:1.2rem;padding:.85rem clamp(1rem,4vw,2.5rem)}
+.bar .mark{font-family:var(--serif);font-size:1.1rem}
+.bar nav{margin-left:auto;display:flex;gap:1.2rem}
+.bar a{font:500 .8rem var(--sans);color:var(--muted);text-decoration:none}
+.bar a:hover{color:var(--ink)}
+main{flex:1;display:grid;place-items:center;padding:2rem clamp(1rem,4vw,2.5rem) 6rem}
+.box{max-width:34rem;text-align:center}
+.eyebrow{font:600 .7rem var(--mono);letter-spacing:.28em;color:var(--marker);
+  text-transform:uppercase;margin:0 0 1rem}
+h1{font-family:var(--serif);font-weight:500;font-size:clamp(2rem,7vw,3.4rem);
+  line-height:1.08;letter-spacing:-.015em;margin:0}
+h1 b{font-weight:500;box-shadow:inset 0 -.28em 0 var(--marker-wash)}
+p{color:var(--muted);font-size:clamp(.95rem,2.4vw,1.05rem);line-height:1.6;
+  margin:1.1rem auto 0;max-width:26rem}
+.links{margin-top:2rem;display:flex;gap:.7rem;justify-content:center;flex-wrap:wrap}
+.links a{font:500 .85rem var(--sans);text-decoration:none;color:var(--ink);
+  background:var(--side);border:1px solid var(--hairline);border-radius:9px;
+  padding:.6rem 1rem}
+.links a.pri{background:var(--marker);border-color:var(--marker);color:#201a05;font-weight:600}
+.links a:hover{border-color:var(--marker)}
+</style>
+
+<div class="bar"><span class="mark">Rhapsode</span>
+  <nav><a href="/dashboard">Home</a><a href="/">Library</a></nav></div>
+
+<main>
+  <div class="box">
+    <p class="eyebrow">404 · not found</p>
+    <h1>This page isn't <b>in the library</b>.</h1>
+    <p>The page you're looking for doesn't exist — or you don't have access to
+      it. Either way, it isn't here.</p>
+    <div class="links">
+      <a class="pri" href="/">Back to the library</a>
+      <a href="/dashboard">Dashboard</a>
+    </div>
+  </div>
+</main>
