@@ -282,11 +282,16 @@ shows only that a credential is attached and its last four characters, never the
 value. Saving one form never disturbs the other, and each **Clear** removes only
 its own credential.
 
-**You set per-user audio-hour caps on the People page** (`/admin`). Each account
+**You set per-user audio-hour caps on the Manage page** (`/admin`). Each account
 shows papers, audio-hours, whether they self-host, and their operator-hours as
 `used / cap`. "Set cap" (or "Change") sets a ceiling in audio hours; leave it
 blank for unlimited. The cap counts only operator-billed hours — a user on their
 own Modal is never gated.
+
+Every newly invited account starts with a default cap of `[auth]
+default_tts_hours` (3 hours out of the box; set it to `0` for no default). The
+admin is bootstrapped rather than invited, so it is never capped. Change or
+clear any account's cap on the Manage page afterwards.
 
 The ceiling is soft. When a user is over their cap, their next operator-billed
 paper is not synthesised: it shows in the queue as **`blocked`** with the reason

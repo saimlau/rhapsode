@@ -758,6 +758,12 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         except ValueError as e:
             return Response(status_code=303, headers={
                 "Location": f"/join/{token}?bad={quote(str(e))}"})
+        # give a new account the default shared-compute cap (admins, who are
+        # bootstrapped rather than invited, stay uncapped); the admin can raise
+        # or clear it per user on the Manage page
+        cap = auth_cfg.get("default_tts_hours")
+        if cap:
+            users.set_quota(who, "tts_hours", float(cap))
         return _login_cookie(
             Response(status_code=303, headers={"Location": "/dashboard"}), who)
 

@@ -64,3 +64,23 @@ def test_non_admin_cannot_set_a_quota():
     r = c.put("/api/users/bob", headers=h, json={"quota": {"tts_hours": 1.0}})
     assert r.status_code == 404
     assert users.get_quota("bob") == {}
+
+
+def test_new_invited_user_gets_the_default_cap():
+    """A colleague who redeems an invite starts with the configured shared-
+    compute cap; the admin (bootstrapped, not invited) stays uncapped."""
+    root = Path(tempfile.mkdtemp())
+    lib = server.Library(root)
+    users = auth.Users(root)
+    users.create("admin", None, admin=True, pw_hash=auth.hash_password("adminpw is long"))
+    worker = server.Worker(lib, "af_heart", 1.0, 150, users=users)
+    app = server.create_app(lib, worker,
+                            {"multiuser": True, "password_hash": auth.hash_password("x"),
+                             "default_tts_hours": 3.0}, users)
+    c = TestClient(app)
+    a = _login(c, "admin", "adminpw is long")
+    tok = c.post("/api/invites", headers=a).json()["token"]
+    c.post(f"/join/{tok}", data={"username": "carol", "password": "carol long password"},
+           follow_redirects=False)
+    assert users.get_quota("carol") == {"tts_hours": 3.0}
+    assert users.get_quota("admin") == {}, "the admin is not capped"

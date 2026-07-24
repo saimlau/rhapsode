@@ -244,6 +244,7 @@ body { display: flex; flex-direction: column; background: var(--desk);
   <nav>
     <a href="/dashboard">Home</a>
     <a class="here" href="/">Library</a>
+    <a id="manageLink" href="/admin" hidden>Manage</a>
     <form method="post" action="/logout" style="display:inline">
       <button class="out" type="submit">Sign out</button>
     </form>
@@ -939,6 +940,10 @@ function apply(snap) {
   dragId = null;
   render();
 }
+// show the admin-only "Manage" link if this account is an admin
+fetch("/api/me").then(r => r.ok ? r.json() : null)
+  .then(m => { if (m && m.admin) $("manageLink").hidden = false; })
+  .catch(() => {});
 const es = new EventSource("/api/events");
 es.onmessage = e => apply(JSON.parse(e.data));
 fetch("/api/library").then(r => r.json()).then(snap => {
