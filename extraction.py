@@ -608,8 +608,12 @@ def extract_segments(pdf_path, max_pages=None):
                     segments = [s for s in segments if s[0] != "heading"]
                     meta["title"], title_size, title_locked = flat, size, True
                     title_idx = len(segments)
-                elif (page_no == 0 and not title_locked
+                elif (page_no == 0 and not title_locked and len(flat) > 1
                         and size > title_size and not is_banner(flat)):
+                    # len > 1 rejects a paragraph's oversized drop-cap initial:
+                    # a single glyph set larger than the title (common in
+                    # Elsevier/Transplantation-Proceedings abstracts) would
+                    # otherwise win the largest-font contest and BE the title.
                     segments = [s for s in segments if s[0] != "heading"]
                     meta["title"], title_size = flat, size
                     title_idx = len(segments)
