@@ -1344,13 +1344,21 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         name = str(body.get("name", "")).strip()
         if not name:
             raise HTTPException(400, "playlist name required")
-        if "/" in name:
-            raise HTTPException(400, "a folder name cannot contain '/'")
         who = caller(request)
         parent = body.get("parent")
         if parent:
-            own_playlist(parent, request)      # a subfolder under an owned one
+            # a subfolder under an explicit parent: `name` is a LEAF, so a "/"
+            # is invalid (the UI's New-subfolder path)
+            if "/" in name:
+                raise HTTPException(400, "a folder name cannot contain '/'")
+            own_playlist(parent, request)
             return {"id": lib.create_folder(name, owner=who, parent=parent)}
+        if "/" in name:
+            # a slashed PATH with no explicit parent (the Zotero plugin's
+            # "Grandparent / Parent / Child"): resolve it into the folder tree,
+            # find-or-create each level. Idempotent, so re-sending never
+            # duplicates a folder.
+            return {"id": lib.playlist_by_name(name, owner=who)}
         return {"id": lib.create_folder(name, owner=who, parent=None)}
 
     @app.put("/api/playlists/{plid}")

@@ -149,9 +149,31 @@ def test_create_subfolder_under_an_owned_folder():
     child = c.post("/api/playlists", headers=h,
                    json={"name": "Sheep Model", "parent": parent}).json()["id"]
     assert lib.data["playlists"][child]["parent"] == parent
-    # a slash in a folder name is refused (paths are built from the tree now)
+    # a slash in a LEAF name (under an explicit parent) is refused — the leaf
+    # can't itself be a path
     assert c.post("/api/playlists", headers=h,
-                  json={"name": "a / b"}).status_code == 400
+                  json={"name": "a / b", "parent": parent}).status_code == 400
+
+
+def test_slashed_name_with_no_parent_resolves_into_the_tree():
+    """The Zotero plugin POSTs a full 'Grandparent / Parent / Child' path (no
+    explicit parent) to ensure the folders exist; it must resolve into the tree,
+    not 400."""
+    app, lib = _app()
+    c = TestClient(app)
+    h = _login(c, "alice")
+    r = c.post("/api/playlists", headers=h, json={"name": "Osteo Lab / Sheep Model"})
+    assert r.status_code == 200, r.text
+    leaf = r.json()["id"]
+    assert lib.data["playlists"][leaf]["name"] == "Sheep Model"
+    parent = lib.data["playlists"][leaf]["parent"]
+    assert lib.data["playlists"][parent]["name"] == "Osteo Lab"
+    # idempotent: the same path returns the same leaf, no duplicate folder
+    again = c.post("/api/playlists", headers=h,
+                   json={"name": "Osteo Lab / Sheep Model"}).json()["id"]
+    assert again == leaf
+    assert sum(1 for p in lib.data["playlists"].values()
+               if p["name"] == "Sheep Model") == 1
 
 
 def test_cannot_make_a_subfolder_under_someone_elses_folder():
