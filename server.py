@@ -636,8 +636,8 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
             return await call_next(request)
         path = request.url.path
         if path in ("/login", "/logout") or path.startswith("/favicon") \
-                or path.startswith("/join"):
-            return await call_next(request)
+                or path.startswith("/join") or path.startswith("/auth/"):
+            return await call_next(request)   # /auth/<token> IS the login step
         claims = auth.session_claims(request.cookies.get(auth.COOKIE, ""), secret)
         if claims is not None:
             who, epoch = claims
@@ -698,6 +698,35 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
                         httponly=True, secure=True, samesite="lax",
                         max_age=auth.DEFAULT_TTL, path="/")
         return resp
+
+    # one-time login links: an already-authenticated machine client (the Zotero
+    # plugin, with its stored credentials) mints a short-lived single-use token
+    # so the browser tab it opens lands signed in as the SAME account, without
+    # the password ever touching a URL.
+    _session_links = {}   # token -> (user, expiry epoch)
+
+    @app.post("/api/session-link")
+    def make_session_link(request: Request):
+        if not (multiuser or auth_cfg.get("password_hash")):
+            raise HTTPException(404, "not found")   # no login gate to hand off
+        who = caller(request) or ""                 # "" = the single-user account
+        now = time.time()
+        for t in [t for t, (_u, e) in _session_links.items() if e < now]:
+            _session_links.pop(t, None)             # sweep expired
+        token = secrets.token_urlsafe(24)
+        _session_links[token] = (who, now + 60)     # 60s to open the tab
+        return {"path": f"/auth/{token}"}
+
+    @app.get("/auth/{token}")
+    def consume_session_link(token: str, next: str = "/"):
+        got = _session_links.pop(token, None)        # single use
+        if not got or got[1] < time.time():
+            return Response(status_code=303, headers={"Location": "/login"})
+        # local paths only — never redirect to another origin
+        dest = next if (next.startswith("/")
+                        and not next.startswith(("//", "/\\"))) else "/"
+        return _login_cookie(
+            Response(status_code=303, headers={"Location": dest}), got[0])
 
     @app.post("/login")
     def login_submit(request: Request, username: str = Form(""),

@@ -185,6 +185,24 @@ function collectionPath(col) {
   return segs;
 }
 
+async function sessionUrl(path) {
+  // Ask the server, with our stored credentials, for a one-time login link so
+  // the tab we open lands already signed in as the same account. Falls back to
+  // the plain URL when there is no login gate (local, no password) or against
+  // an older server — then the tab just shows the login page as before.
+  try {
+    const resp = await Zotero.HTTP.request("POST", base() + "/api/session-link", {
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: "{}", timeout: 15000,
+    });
+    const link = JSON.parse(resp.responseText).path;
+    if (link) return base() + link + "?next=" + encodeURIComponent(path);
+  } catch (e) {
+    log("session-link failed (" + e + "); opening without auto-login");
+  }
+  return base() + path;
+}
+
 async function ensurePlaylist(name) {
   await Zotero.HTTP.request("POST", base() + "/api/playlists", {
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -213,8 +231,8 @@ async function listenCollection(win) {
   const rootPath = collectionPath(col);
   const sent = await walk(col, rootPath);
   if (!sent) throw new Error("No PDF attachments found in this collection");
-  openTab(win, base() + "/?playlist="
-               + encodeURIComponent(rootPath.join(" / ")));
+  openTab(win, await sessionUrl("/?playlist="
+               + encodeURIComponent(rootPath.join(" / "))));
 }
 
 async function listen(win) {
@@ -231,7 +249,7 @@ async function listen(win) {
   if (!lastId) {
     throw new Error("No PDF attachment found on the selected item(s)");
   }
-  openTab(win, base() + "/?play=" + encodeURIComponent(lastId));
+  openTab(win, await sessionUrl("/?play=" + encodeURIComponent(lastId)));
 }
 
 function loadInBrowser(browser, url) {
