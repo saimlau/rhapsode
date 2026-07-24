@@ -171,7 +171,22 @@ async function bestPdf(item) {
   let att = null;
   if (item.isAttachment()) att = item;
   else if (item.isRegularItem()) att = await item.getBestAttachment();
-  return att && att.attachmentContentType === "application/pdf" ? att : null;
+  if (!att || att.attachmentContentType !== "application/pdf") return null;
+  // The attachment can exist in Zotero while its file is missing on disk (not
+  // synced/downloaded, or deleted). Reading it would throw NS_ERROR_FILE_NOT_
+  // FOUND and abort the whole batch — skip it instead so the rest go through.
+  try {
+    const path = att.getFilePath();
+    if (!path || !(await IOUtils.exists(path))) {
+      log("skipping '" + (att.attachmentFilename || att.id)
+          + "': its PDF file is not on disk (not downloaded, or deleted)");
+      return null;
+    }
+  } catch (e) {
+    log("skipping an item: cannot resolve its PDF path (" + e + ")");
+    return null;
+  }
+  return att;
 }
 
 function collectionPath(col) {
