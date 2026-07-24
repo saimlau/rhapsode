@@ -109,9 +109,16 @@ def _gather_blocks(doc):
         if pi < 2 and _is_cover_sheet(page):
             continue
         page_blocks = []
+        ht = page.rect.height
         for b in page.get_text("blocks"):
             x0, y0, x1, y1, txt, _no, typ = b
             if typ != 0 or not txt.strip():
+                continue
+            # running headers/footers/page-numbers/side watermarks live in the
+            # top/bottom margins — drop them so the model never keeps them (a
+            # letter-tracked "SCIENCE ROBOTICS | FOCUS" banner, a "1 of 3"
+            # footer). The heuristic extractor already does this.
+            if y1 < 0.07 * ht or y0 > 0.93 * ht:
                 continue
             page_blocks.append({"id": len(blocks) + len(page_blocks), "page": pi,
                                 "x0": x0, "y0": y0, "x1": x1, "y1": y1,

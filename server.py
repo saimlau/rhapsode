@@ -292,6 +292,19 @@ class Worker(threading.Thread):
             return QUOTA_BLOCK_MSG
         return None
 
+    def _resumable_ffmpeg_interrupt(self, pid, exc):
+        """True when a failure is an ffmpeg death that left a resume checkpoint
+        behind — almost always a shutdown killing the encoder mid-paper, which
+        should resume on restart rather than mark the paper errored. A genuine
+        ffmpeg failure has no checkpoint (it dies before any audio) or is a
+        different message, so it still errors."""
+        if not (isinstance(exc, RuntimeError) and "ffmpeg" in str(exc).lower()):
+            return False
+        try:
+            return any(self.lib.view_dir(pid).glob("*.ckpt"))
+        except Exception:
+            return False
+
     def _idle_tick(self):
         p2a.maybe_idle_models(self.tts_cfg.get("park_after_s", 300),
                               self.tts_cfg.get("unload_after_s", 1800))
@@ -410,10 +423,20 @@ class Worker(threading.Thread):
                     return
                 if isinstance(e, (KeyboardInterrupt, SystemExit)):
                     raise                      # a real stop must still stop
-                try:
-                    self.lib.update(pid, status="error", error=str(e))
-                except Exception as inner:     # never let bookkeeping kill it
-                    print(f"could not record failure for {pid}: {inner}")
+                # An ffmpeg death almost always means a restart/shutdown killed
+                # the detached encoder mid-paper (systemd tears down the whole
+                # cgroup). If a resume checkpoint exists, the audio so far is
+                # safe — leave the paper 'generating' so the next startup
+                # resumes it from the checkpoint, rather than marking it
+                # permanently errored (this is what interrupted Hiatt/Al-Yacoub).
+                if self._resumable_ffmpeg_interrupt(pid, e):
+                    print(f"ffmpeg interrupted with a checkpoint present; "
+                          f"leaving {pid} resumable")
+                else:
+                    try:
+                        self.lib.update(pid, status="error", error=str(e))
+                    except Exception as inner:  # never let bookkeeping kill it
+                        print(f"could not record failure for {pid}: {inner}")
             finally:
                 self.last_activity = time.time()  # work isn't idle time —
                 # the idle-exit clock starts when the batch ENDS

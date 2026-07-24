@@ -218,8 +218,32 @@ def clean_mapped(mt):
     return mt.strip()
 
 
+def _despace(text):
+    """Letter-tracked text (banners, running headers, some titles) is narrated
+    one letter at a time. Collapse a run of 3+ single letters
+    ("H U M A N" -> "HUMAN"), then drop a run of 4+ consecutive ALL-CAPS tokens
+    that average <=3 chars — an unreconstructable tracked banner like
+    "HU MA N-ROB OT IN TER AC TI ON". Real all-caps phrases (whose words are
+    longer) are left alone."""
+    text = re.sub(r"\b(?:[A-Za-z] ){2,}[A-Za-z]\b",
+                  lambda m: m.group(0).replace(" ", ""), text)
+    toks = text.split()
+    keep, i = [], 0
+    while i < len(toks):
+        j = i
+        while (j < len(toks) and toks[j].isupper()
+               and any(c.isalpha() for c in toks[j])):
+            j += 1
+        run = toks[i:j]
+        if len(run) >= 4 and sum(len(t) for t in run) / len(run) <= 3:
+            i = j                      # a letter-tracked banner — drop it
+            continue
+        keep.append(toks[i]); i += 1
+    return " ".join(keep)
+
+
 def clean_text(text):
-    return clean_mapped(MappedText.plain(text)).text
+    return _despace(clean_mapped(MappedText.plain(text)).text)
 
 
 def split_sentences(mt, limit=450):
