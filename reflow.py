@@ -25,46 +25,52 @@ except Exception:  # pragma: no cover - extraction always importable in practice
     def clean_text(t):
         return " ".join((t or "").split())
 
+# The model's ONE job: label each block. Ordering is geometry (see
+# _reading_order) and the keep/drop policy lives in code (NARRATED) — a model
+# that must also sequence two-column pages reliably scrambles them, and a
+# binary keep/drop hides WHY a block was dropped. Labelling is a better-posed
+# task, it is debuggable (you can see a paragraph mislabelled "caption"), and
+# an unknown or missing label falls back to BODY, so the failure mode is
+# narrating a caption rather than silently losing a paragraph.
+BODY, HEADING, EQUATION = 0, 1, 2
+FURNITURE, CAPTION, TABLE, FRONTMATTER, REFERENCE, COVER = 3, 4, 5, 6, 7, 8
+NARRATED = {BODY, HEADING, EQUATION}
+
 PROMPT = """\
 Below are the text blocks of an academic paper, extracted from a PDF. Each
 line is one block: its id, page number, top-left (x, y) position, and its
-first sentence (head) and last sentence (tail). Left-column x is small,
-right-column x is large.
+first sentence (head) and last sentence (tail).
 
-Decide which blocks are READABLE CONTENT to narrate — the title, the abstract,
-section/subsection headings, and body paragraphs — and which are FURNITURE to
-drop: journal/running headers and footers, author names and affiliations,
-the article-info / keywords / history box, corresponding-author footnotes,
-emails, DOI and copyright lines, page numbers, figure and table captions,
-table content (cells, rows, numeric data), any document-delivery or
-interlibrary-loan cover sheet prepended to the file (library contact details,
-"thank you for using our service", photocopy/copyright notices — these come
-before the paper and are not part of it), and everything from
-References/Bibliography onward (including acknowledgements, funding, author
-contributions, and the reference list).
+Label EVERY block with one number:
 
-Separately, identify DISPLAY EQUATIONS: blocks that are a standalone
-mathematical expression set off from the text, often centred and often with a
-number like (3) at the right margin. These are neither content nor furniture —
-list their ids in "equations" and ALSO include them in "order" at the position
-where they are read, so the narration pauses at the equation instead of
-speaking its symbols. A block of ordinary prose that merely contains a few
-symbols is body text, not a display equation.
+ 0 BODY        a paragraph of the paper's prose (including the abstract)
+ 1 HEADING     the paper title, or a section/subsection heading
+ 2 EQUATION    a standalone display equation, set off from the text and often
+               centred with a number like (3) at the margin. A prose paragraph
+               that merely contains a few symbols is 0, not 2.
+ 3 FURNITURE   running header/footer, journal banner, page number
+ 4 CAPTION     a figure or table caption
+ 5 TABLE       table content: cells, rows, numeric data
+ 6 FRONTMATTER author names, affiliations, emails, DOI, copyright, keywords,
+               article history / info box, corresponding-author footnotes
+ 7 REFERENCE   the References/Bibliography heading and its entries, and
+               acknowledgements, funding and author-contribution sections
+ 8 COVER       an interlibrary-loan or document-delivery cover sheet prepended
+               to the scan (library contact details, "thank you for using our
+               service", photocopy/copyright notices) — not part of the paper
 
 IMPORTANT: a block whose first word is lowercase, or whose tail does not end
 with sentence punctuation, is a body paragraph split across a column or page
-break (often stranded next to a footnote or the page bottom). KEEP these — they
-are body text, never furniture — and place them so the sentence reads
-continuously.
+break (often stranded next to a footnote or the page bottom). Label it 0 — it
+is body text, never furniture.
 
-Return the content blocks in correct reading order (each page: left column
-top-to-bottom, then right column; a block whose tail does not end with
-sentence punctuation continues into the next content block).
+When unsure between 0 and anything else, choose 0.
+
+Do NOT reorder anything: reading order is computed separately from the block
+positions. Just label what each block IS.
 
 Reply with ONLY a JSON object, no prose:
-{"order": [ids of content blocks, in reading order],
- "headings": [subset of order that are the title or a section heading],
- "equations": [subset of order that are standalone display equations],
+{"labels": {"<block id>": <label number>, ...},
  "authors": "comma-separated author names, or empty string",
  "year": publication year as an integer, or null}
 """
@@ -147,6 +153,82 @@ def _compact(blocks):
         lines.append(f'[{b["id"]}] p{b["page"]} x={round(b["x0"])} '
                      f'y={round(b["y0"])} | head: {head!r} | tail: {tail!r}')
     return "\n".join(lines)
+
+
+COLUMN_GAP_FRAC = 0.10   # a column break is a gap this wide, in page widths
+
+
+SPAN_WIDTH_FRAC = 0.55   # a block this wide (in page widths) spans the columns
+CENTRED_FRAC = 0.06      # ...or one whose centre sits this close to the middle
+
+
+def _spans(b, page_width):
+    """True for a block that belongs to no single column: one wide enough to
+    cross them, or one centred on the page. The centred test is what catches a
+    CENTRED title — its left edge sits inside the right column's x range, so
+    an x0-only rule files the title under the wrong column and reads it after
+    the whole left column. In a single-column paper every block is centred and
+    therefore spanning, which degrades to a plain top-down sort: correct."""
+    if b["x1"] - b["x0"] > SPAN_WIDTH_FRAC * page_width:
+        return True
+    centre = (b["x0"] + b["x1"]) / 2
+    return abs(centre - page_width / 2) < CENTRED_FRAC * page_width
+
+
+def _columns(page_blocks, page_width):
+    """Column index per block id, by gap-splitting the left edges: sort the
+    distinct x0 values and cut wherever two consecutive edges differ by more
+    than COLUMN_GAP_FRAC of the page width. Deterministic (unlike k-means,
+    whose random init would reorder a cached paper on re-extraction) and it
+    naturally yields 1, 2 or 3 columns without choosing a k."""
+    xs = sorted({round(b["x0"], 1) for b in page_blocks})
+    cuts = [(a + b) / 2 for a, b in zip(xs, xs[1:])
+            if b - a > COLUMN_GAP_FRAC * page_width]
+    return {b["id"]: sum(1 for c in cuts if b["x0"] > c) for b in page_blocks}
+
+
+def _reading_order(blocks, widths):
+    """Blocks in reading order, from geometry alone — no model call.
+
+    Per page: spanning blocks (title, authors, a full-width abstract or figure)
+    split the page into horizontal bands; within a band, read column by column
+    left to right, top to bottom. A plain top-down sort would interleave the
+    two columns of a paper, and ignoring spanning blocks strands a centred
+    title in the wrong column."""
+    out = []
+    for page in sorted({b["page"] for b in blocks}):
+        pb = [b for b in blocks if b["page"] == page]
+        width = widths.get(page) or 612.0
+        span = [b for b in pb if _spans(b, width)]
+        rest = [b for b in pb if b not in span]
+        # columns come from the column blocks only: a centred title's stray x0
+        # would otherwise invent a spurious middle column
+        col = _columns(rest, width) if rest else {}
+        bounds = sorted(b["y0"] for b in span)
+        band = lambda y: sum(1 for t in bounds if y >= t)
+        keyed = ([(band(b["y0"]), -1, b["y0"], b["x0"], b) for b in span]
+                 + [(band(b["y0"]), col[b["id"]], b["y0"], b["x0"], b)
+                    for b in rest])
+        out += [k[-1] for k in sorted(keyed, key=lambda k: k[:-1])]
+    return out
+
+
+RESCUE_WORDS = 120       # a "furniture" block this long is really body text
+RESCUABLE = {FURNITURE, CAPTION, FRONTMATTER}
+
+
+def _rescued(block, labels):
+    """True for a long prose block the model called furniture. Running headers,
+    captions and affiliation lines are short; a 200-word paragraph labelled
+    FRONTMATTER is a misread (this is what silently ate a third of a Science
+    Robotics paper). References, tables and cover sheets are NOT rescued — they
+    are legitimately long. Erring here narrates a long caption at worst, which
+    beats losing a paragraph."""
+    lab = labels.get(block["id"])
+    if lab not in RESCUABLE:
+        return False
+    text = " ".join(block["text"].split())
+    return len(text.split()) >= RESCUE_WORDS and _narratable(text)
 
 
 def _parse_decision(text):
@@ -294,13 +376,11 @@ def _windows(blocks, limit):
 DECISION_SCHEMA = {
     "type": "object",
     "properties": {
-        "order": {"type": "array", "items": {"type": "integer"}},
-        "headings": {"type": "array", "items": {"type": "integer"}},
-        "equations": {"type": "array", "items": {"type": "integer"}},
+        "labels": {"type": "object", "additionalProperties": {"type": "integer"}},
         "authors": {"type": "string"},
         "year": {"type": ["integer", "null"]},
     },
-    "required": ["order", "headings"],
+    "required": ["labels"],
 }
 
 
@@ -321,7 +401,11 @@ def _classify_windows(windows, llm_cfg):
         try:
             return _classify(w, llm_cfg)
         except Exception:
-            return {"order": [], "headings": []}
+            return None    # a failed window contributes no labels; its blocks
+                           # fall back to BODY (keep the text). If EVERY window
+                           # fails, extract_document raises so the heuristic
+                           # extractor takes over instead of narrating the
+                           # whole PDF verbatim, furniture and all.
     with cf.ThreadPoolExecutor(max_workers=4) as ex:
         return list(ex.map(one, windows))
 
@@ -386,14 +470,45 @@ def extract_document(pdf_path, llm_cfg):
                            f"{len(windows)} windows > {MAX_WINDOWS})")
     decisions = _classify_windows(windows, llm_cfg)
 
-    order, headings, equations, authors, year = [], set(), set(), "", None
-    for d in decisions:
-        order += [i for i in d.get("order", []) if i in byid]
-        headings |= {i for i in d.get("headings", []) if i in byid}
-        equations |= {i for i in d.get("equations", []) if i in byid}
+    labels, authors, year = {}, "", None
+    for d in [x for x in decisions if x]:
+        for k, v in (d.get("labels") or {}).items():
+            try:
+                labels[int(k)] = int(v)
+            except (TypeError, ValueError):
+                continue           # a junk label just falls back to BODY
         authors = authors or (d.get("authors") or "").strip()
         year = year or d.get("year")
-    equations -= headings          # a block is one or the other, never both
+
+    # No labels at all means the classification failed outright (every window
+    # errored, or the model answered with an empty object). Raise so
+    # prepare_units falls back to the heuristic extractor — WITHOUT this, the
+    # BODY default would "succeed" by narrating every block verbatim, journal
+    # banners and reference list included.
+    if not labels:
+        raise llm.LLMError("LLM returned no block labels")
+
+    # ORDER IS GEOMETRY, not the model's opinion: it has the block boxes, so
+    # asking it to sequence a two-column page only invited the scrambling it
+    # used to produce.
+    widths = {pi: page.rect.width for pi, page in enumerate(doc)}
+    ordered = _reading_order(blocks, widths)
+
+    # Everything from the reference list onward goes. Cut at the first
+    # REFERENCE block in the back half of the document — a stray REFERENCE
+    # label early on (a mid-paper citation block) is dropped on its own rather
+    # than truncating the paper.
+    for pos, b in enumerate(ordered):
+        if labels.get(b["id"]) == REFERENCE and pos > len(ordered) * 0.5:
+            ordered = ordered[:pos]
+            break
+
+    # An unlabelled block is BODY: losing a paragraph is worse than narrating
+    # a caption, so the default keeps text rather than dropping it.
+    order = [b["id"] for b in ordered
+             if labels.get(b["id"], BODY) in NARRATED or _rescued(b, labels)]
+    headings = {i for i in order if labels.get(i) == HEADING}
+    equations = {i for i in order if labels.get(i) == EQUATION}
     if not order:
         raise llm.LLMError("LLM kept no content blocks")
 
