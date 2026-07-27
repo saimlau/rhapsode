@@ -78,3 +78,69 @@ if __name__ == "__main__":
     for n, f in sorted(globals().items()):
         if n.startswith("test_") and callable(f):
             f(); print("ok", n)
+
+
+def _heading_pdf(tmp):
+    """A bold section heading at the SAME size as the body text that follows —
+    the Chen et al. layout where the heading was swallowed by the paragraph."""
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "2.2 Nonlinear MPC for Incremental Bending",
+                     fontsize=9.4, fontname="helvetica-bold")
+    y = 114
+    for line in ["With the GP-enhanced predictive model for post-springback",
+                 "angle, nonlinear MPC is investigated to generate an optimal",
+                 "sequence of bending inputs to achieve the desired geometry."]:
+        page.insert_text((72, y), line, fontsize=9.4, fontname="times-roman")
+        y += 11
+    p = Path(tmp) / "heading.pdf"; doc.save(str(p))
+    return str(p)
+
+
+def test_bold_heading_is_split_from_the_paragraph():
+    with tempfile.TemporaryDirectory() as t:
+        blocks = reflow._gather_blocks(fitz.open(_heading_pdf(t)))
+        joined = [" ".join(b["text"].split()) for b in blocks]
+        head = [x for x in joined if x.startswith("2.2 Nonlinear MPC")]
+        body = [x for x in joined if "With the GP-enhanced" in x]
+        assert head and body, f"both must survive: {joined}"
+        assert head[0] != body[0], \
+            f"a same-size bold heading must not be glued to the paragraph: {joined}"
+        assert "With the GP-enhanced" not in head[0], "heading must stand alone"
+
+
+def _line(y, spans):
+    """A PyMuPDF-shaped line dict: [(text, font, size), ...]."""
+    return {"bbox": (72, y, 500, y + 10),
+            "spans": [{"text": t, "font": f, "size": sz} for t, f, sz in spans]}
+
+
+def test_inline_emphasis_does_not_split_a_paragraph():
+    """One bold word inside a line is not a typeface change: the split keys on
+    each line's DOMINANT face, so a paragraph with emphasis stays whole."""
+    lines = [
+        _line(100, [("This paragraph runs across several lines of body text",
+                     "TimesNewRomanPSMT", 10.0)]),
+        _line(112, [("and mentions one ", "TimesNewRomanPSMT", 10.0),
+                    ("emphasised", "TimesNewRomanPS-BoldMT", 10.0),
+                    (" term but must stay whole here", "TimesNewRomanPSMT", 10.0)]),
+        _line(124, [("because the dominant face of every line is unchanged.",
+                     "TimesNewRomanPSMT", 10.0)]),
+    ]
+    assert len(reflow._split_lines(lines)) == 1, \
+        "inline emphasis must not shatter a paragraph"
+
+
+def test_whole_bold_line_does_split():
+    """A heading line set entirely in the bold face is a real boundary."""
+    lines = [
+        _line(100, [("2.2 Nonlinear MPC for Incremental Bending",
+                     "Arial-BoldMT", 9.4)]),
+        _line(114, [("With the GP-enhanced predictive model for post-springback",
+                     "TimesNewRomanPSMT", 9.4)]),
+        _line(125, [("angle, nonlinear MPC is investigated to generate inputs.",
+                     "TimesNewRomanPSMT", 9.4)]),
+    ]
+    runs = reflow._split_lines(lines)
+    assert len(runs) == 2, f"heading must separate from the body: {len(runs)} runs"
+    assert len(runs[0]) == 1 and len(runs[1]) == 2

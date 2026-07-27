@@ -117,6 +117,18 @@ def _line_size(line):
     return max(w, key=w.get) if w else 0.0
 
 
+def _line_font(line):
+    """Dominant font NAME of a line, weighted by characters. Per-line and
+    dominant on purpose: one bold or italic word inside a paragraph must not
+    look like a typeface change, but a whole heading line set in the bold face
+    must."""
+    w = {}
+    for s in line.get("spans", []):
+        key = s.get("font", "")
+        w[key] = w.get(key, 0) + len(s.get("text", ""))
+    return max(w, key=w.get) if w else ""
+
+
 def _split_lines(lines):
     """Group one PDF block's lines into runs of consistent layout, cutting
     where the dominant font size changes or a vertical gap opens.
@@ -131,10 +143,16 @@ def _split_lines(lines):
     for ln in lines:
         if not "".join(s.get("text", "") for s in ln.get("spans", [])).strip():
             continue
-        size, y = _line_size(ln), ln["bbox"][1]
+        size, font, y = _line_size(ln), _line_font(ln), ln["bbox"][1]
         if cur:
-            gap = y - cur[-1][2]
-            cut = abs(size - cur[-1][1]) > SPLIT_SIZE_DELTA
+            gap = y - cur[-1][3]
+            # A section heading is often the SAME size as the body and sits at
+            # a normal line gap — only the typeface differs (Arial-BoldMT over
+            # TimesNewRomanPSMT). Without this the heading is swallowed by the
+            # paragraph under it, so it is narrated mid-sentence and the reader
+            # gets no section to jump to.
+            cut = (abs(size - cur[-1][1]) > SPLIT_SIZE_DELTA
+                   or font != cur[-1][2])
             if not cut and pitch and gap > SPLIT_GAP_RATIO * pitch:
                 cut = True
             if cut:
@@ -143,7 +161,7 @@ def _split_lines(lines):
             elif gap > 0.5 and pitch is None:
                 pitch = gap        # the run's own line pitch; cells sharing a
                                    # y give gap 0, so only a real step sets it
-        cur.append((ln, size, y))
+        cur.append((ln, size, font, y))
     if cur:
         runs.append(cur)
     return [[t[0] for t in run] for run in runs]
