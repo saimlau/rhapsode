@@ -1515,7 +1515,12 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
             entry = lib.paper(pid)
             if entry["status"] in ("generating", "pending"):
                 return {"ok": True, "queued": False}  # dedupe repeat clicks
-            entry.update(status="pending", progress=0.0, error=None)
+            # Re-narrating rebuilds the audio with different timings, so every
+            # saved position now points at arbitrary content. Keeping it drops
+            # the listener into the middle of the new narration, which reads as
+            # "chunks are missing"; clearing it restarts the paper honestly.
+            entry.update(status="pending", progress=0.0, error=None, resume_t=0)
+            entry.pop("resume_by", None)   # shared readers' places too
             lib.save()
         worker.enqueue(pid)
         return {"ok": True, "queued": True}
@@ -1740,7 +1745,15 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
             raise HTTPException(403, "path outside paper folder")
         if not target.is_file():
             raise HTTPException(404, "not generated yet")
-        return FileResponse(target)
+        resp = FileResponse(target)
+        # A regenerated paper REUSES these URLs (narration.m4a, manifest.json,
+        # page-*.png). With no Cache-Control a browser applies heuristic
+        # caching and keeps serving the OLD audio after a regeneration — the
+        # work happens on the server and the listener never hears it.
+        # "no-cache" means revalidate, not "don't store": FileResponse already
+        # sends ETag/Last-Modified, so an unchanged file costs a cheap 304.
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     return app
 
