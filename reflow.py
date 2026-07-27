@@ -104,6 +104,51 @@ def _is_cover_sheet(page):
     return len(text) < 4000        # a cover sheet is a page of notices
 
 
+SPLIT_SIZE_DELTA = 0.6   # pt: a dominant-font-size change this big cuts a block
+SPLIT_GAP_RATIO = 1.6    # ...as does a line gap this many times the line pitch
+
+
+def _line_size(line):
+    """Dominant font size of a line, weighted by characters."""
+    w = {}
+    for s in line.get("spans", []):
+        key = round(s.get("size", 0), 1)
+        w[key] = w.get(key, 0) + len(s.get("text", ""))
+    return max(w, key=w.get) if w else 0.0
+
+
+def _split_lines(lines):
+    """Group one PDF block's lines into runs of consistent layout, cutting
+    where the dominant font size changes or a vertical gap opens.
+
+    A PDF block routinely fuses a table's cells (or a caption) to the paragraph
+    that follows it. The model only ever sees a block's head and tail, so it
+    labels the whole thing from the table cells and the prose is dropped with
+    them — no prompt wording can fix that, because the prose is never shown.
+    Splitting here fixes the granularity at the source: each run gets its own
+    honest head/tail and its own label."""
+    runs, cur, pitch = [], [], None
+    for ln in lines:
+        if not "".join(s.get("text", "") for s in ln.get("spans", [])).strip():
+            continue
+        size, y = _line_size(ln), ln["bbox"][1]
+        if cur:
+            gap = y - cur[-1][2]
+            cut = abs(size - cur[-1][1]) > SPLIT_SIZE_DELTA
+            if not cut and pitch and gap > SPLIT_GAP_RATIO * pitch:
+                cut = True
+            if cut:
+                runs.append(cur)
+                cur, pitch = [], None
+            elif gap > 0.5 and pitch is None:
+                pitch = gap        # the run's own line pitch; cells sharing a
+                                   # y give gap 0, so only a real step sets it
+        cur.append((ln, size, y))
+    if cur:
+        runs.append(cur)
+    return [[t[0] for t in run] for run in runs]
+
+
 def _gather_blocks(doc):
     """[{id,page,x0,y0,x1,y1,text,words}] — words as (page,x0,y0,x1,y1,text),
     assigned to the block whose bbox contains their centre (robust to any
@@ -116,19 +161,28 @@ def _gather_blocks(doc):
             continue
         page_blocks = []
         ht = page.rect.height
-        for b in page.get_text("blocks"):
-            x0, y0, x1, y1, txt, _no, typ = b
-            if typ != 0 or not txt.strip():
+        for b in page.get_text("dict")["blocks"]:
+            if b.get("type") != 0:
                 continue
-            # running headers/footers/page-numbers/side watermarks live in the
-            # top/bottom margins — drop them so the model never keeps them (a
-            # letter-tracked "SCIENCE ROBOTICS | FOCUS" banner, a "1 of 3"
-            # footer). The heuristic extractor already does this.
-            if y1 < 0.07 * ht or y0 > 0.93 * ht:
-                continue
-            page_blocks.append({"id": len(blocks) + len(page_blocks), "page": pi,
-                                "x0": x0, "y0": y0, "x1": x1, "y1": y1,
-                                "text": txt, "words": []})
+            for run in _split_lines(b.get("lines", [])):
+                txt = "\n".join("".join(s.get("text", "") for s in ln["spans"])
+                                for ln in run)
+                if not txt.strip():
+                    continue
+                x0 = min(ln["bbox"][0] for ln in run)
+                y0 = min(ln["bbox"][1] for ln in run)
+                x1 = max(ln["bbox"][2] for ln in run)
+                y1 = max(ln["bbox"][3] for ln in run)
+                # running headers/footers/page-numbers/side watermarks live in
+                # the top/bottom margins — drop them so the model never keeps
+                # them (a letter-tracked "SCIENCE ROBOTICS | FOCUS" banner, a
+                # "1 of 3" footer). The heuristic extractor already does this.
+                if y1 < 0.07 * ht or y0 > 0.93 * ht:
+                    continue
+                page_blocks.append({"id": len(blocks) + len(page_blocks),
+                                    "page": pi, "x0": x0, "y0": y0,
+                                    "x1": x1, "y1": y1, "text": txt,
+                                    "words": []})
         for w in page.get_text("words"):
             cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
             for blk in page_blocks:
