@@ -214,21 +214,34 @@ def _reading_order(blocks, widths):
 
 
 RESCUE_WORDS = 120       # a "furniture" block this long is really body text
-RESCUABLE = {FURNITURE, CAPTION, FRONTMATTER}
+PROSE_WORDS = 55         # ...or this long, if it reads as full sentences
+RESCUABLE = {FURNITURE, CAPTION, FRONTMATTER, TABLE}
 
 
 def _rescued(block, labels):
-    """True for a long prose block the model called furniture. Running headers,
-    captions and affiliation lines are short; a 200-word paragraph labelled
-    FRONTMATTER is a misread (this is what silently ate a third of a Science
-    Robotics paper). References, tables and cover sheets are NOT rescued — they
-    are legitimately long. Erring here narrates a long caption at worst, which
-    beats losing a paragraph."""
+    """True for a block the model called furniture that is really body text.
+
+    Two ways a paragraph gets mislabelled. It can be misread outright (a
+    200-word paragraph called FRONTMATTER once ate a third of a Science
+    Robotics paper). Or the PDF glues a table's cells to the paragraph that
+    follows it in ONE block: the model labels the block from its head — table
+    cells — and the prose after them is dropped with it. The model cannot split
+    a block, so the guard has to live here.
+
+    A table of cells and a running header never read as several full sentences,
+    which is what separates them from prose. Number/glyph soup is excluded by
+    _narratable, so a genuine long table is still dropped. References and cover
+    sheets are never rescued — they are legitimately long AND sentence-like."""
     lab = labels.get(block["id"])
     if lab not in RESCUABLE:
         return False
     text = " ".join(block["text"].split())
-    return len(text.split()) >= RESCUE_WORDS and _narratable(text)
+    if not _narratable(text):
+        return False
+    n = len(text.split())
+    if n >= RESCUE_WORDS:
+        return True
+    return n >= PROSE_WORDS and len(re.findall(r"[.!?]\s+[A-Z(]", text)) >= 2
 
 
 def _parse_decision(text):
