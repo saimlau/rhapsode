@@ -541,13 +541,18 @@ def _sentence_units(tokens):
     return units
 
 
-def extract_document(pdf_path, llm_cfg):
+def extract_document(pdf_path, llm_cfg, blocks=None):
     """LLM block-classification extraction. Returns (units, meta).
+
+    `blocks` lets a caller supply the block list instead of reading a text
+    layer — that is how a scanned paper enters this path, with blocks rebuilt
+    from OCR words (see ocr.py). Everything after this point is identical, so
+    scans get the same ordering, labelling and read-along rectangles.
 
     Raises llm.LLMError if the model is unavailable or its answer is unusable.
     """
     doc = fitz.open(pdf_path)
-    blocks = _gather_blocks(doc)
+    blocks = _gather_blocks(doc) if blocks is None else blocks
     if not blocks:
         raise llm.LLMError("no text blocks (scanned/image-only PDF?)")
     byid = {b["id"]: b for b in blocks}

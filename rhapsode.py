@@ -43,7 +43,7 @@ TTS_LOCK = threading.Lock()  # one inference at a time (worker + /tts
                              # endpoint) and all pipeline state transitions
 
 
-def prepare_units(pdf_path, grobid_cfg=None, llm_cfg=None):
+def prepare_units(pdf_path, grobid_cfg=None, llm_cfg=None, ocr_cfg=None):
     """Extract and clean a paper. Returns (units, meta, warnings); units are
     {kind, text, rects, para_end, pause}.
 
@@ -54,20 +54,28 @@ def prepare_units(pdf_path, grobid_cfg=None, llm_cfg=None):
     recovers body text GROBID drops around footnotes/column breaks. GROBID (or
     the built-in heuristics) is the fallback when the LLM is off or fails.
 
+    A scanned PDF has no text layer at all. With [ocr] enabled its pages are
+    OCR'd on the GPU endpoint and rebuilt into the same blocks the text path
+    produces, so the rest of the pipeline is unchanged; without it, such a
+    paper still raises ValueError as before.
+
     Raises ValueError for PDFs with no usable text (scanned/image-only).
     """
+    scanned = _ocr_blocks(pdf_path, ocr_cfg)
     if llm_cfg and llm_cfg.get("enabled"):
         import llm as llm_mod
         runner = llm_mod.resolve(llm_cfg)
         if runner:
             try:
                 import reflow
-                units, meta = reflow.extract_document(pdf_path, llm_cfg)
+                units, meta = reflow.extract_document(pdf_path, llm_cfg,
+                                                      blocks=scanned)
                 body = [u for u in units if u["kind"] == "body"]
                 words = sum(len(u["text"].split()) for u in body)
                 if len(body) >= 3 and words >= 300:
                     meta = _resolve_meta(pdf_path, meta)
-                    return units, meta, [f"extracted via LLM ({runner}); "
+                    how = "OCR + LLM" if scanned else f"LLM ({runner})"
+                    return units, meta, [f"extracted via {how}; "
                                          f"metadata via heuristic parser"]
                 fb = f"LLM extraction returned too little ({words} words); "
             except Exception as e:
@@ -79,6 +87,27 @@ def prepare_units(pdf_path, grobid_cfg=None, llm_cfg=None):
         return units, meta, [fb + "used base extractor"] + warnings
 
     return _base_extract(pdf_path, grobid_cfg)
+
+
+def _ocr_blocks(pdf_path, ocr_cfg):
+    """Blocks rebuilt from OCR for a scanned PDF, or None to read the text
+    layer as usual. A failed OCR returns None rather than raising: the paper
+    then follows exactly the path it would have without [ocr] configured."""
+    if not ocr_cfg:
+        return None
+    try:
+        import ocr as ocr_mod
+        if not ocr_mod.enabled(ocr_cfg):
+            return None
+        doc = fitz.open(pdf_path)
+        if not ocr_mod.needs_ocr(doc):
+            return None            # it has a text layer; OCR would be worse
+        blocks = ocr_mod.blocks_for(doc, ocr_cfg)
+        return blocks or None
+    except Exception as e:
+        print(f"  OCR unavailable ({type(e).__name__}: {e}); "
+              f"continuing without it", flush=True)
+        return None
 
 
 def _resolve_meta(pdf_path, llm_meta):
@@ -821,7 +850,7 @@ def main():
                    grobid_cfg=grobid_cfg, tts_cfg=cfg["tts"],
                    idle_exit_min=cfg["gui"].get("idle_exit_min", 0),
                    llm_cfg=llm_cfg, auth_cfg=cfg.get("auth"),
-                   secrets_cfg=cfg.get("secrets"))
+                   secrets_cfg=cfg.get("secrets"), ocr_cfg=cfg.get("ocr"))
         return
 
     if args.pdf is None:

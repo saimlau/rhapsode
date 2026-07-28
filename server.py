@@ -210,7 +210,8 @@ class Worker(threading.Thread):
     queue has been idle, so nothing heavy stays resident between bursts."""
 
     def __init__(self, lib, voice, speed, dpi, grobid_cfg=None, tts_cfg=None,
-                 idle_exit_min=0, llm_cfg=None, users=None, secret_key=None):
+                 idle_exit_min=0, llm_cfg=None, users=None, secret_key=None,
+                 ocr_cfg=None):
         super().__init__(daemon=True)
         self.lib, self.voice, self.speed, self.dpi = lib, voice, speed, dpi
         self.grobid_cfg = grobid_cfg
@@ -218,6 +219,7 @@ class Worker(threading.Thread):
         self.llm_cfg = llm_cfg
         self.users = users
         self.secret_key = secret_key
+        self.ocr_cfg = ocr_cfg
         self.idle_exit_min = idle_exit_min or 0
         self.last_activity = time.time()
         self.q = queue.Queue()
@@ -382,7 +384,8 @@ class Worker(threading.Thread):
                 if prepared is None:
                     progress(0.0, "extracting text")
                     prepared = p2a.prepare_units(self.lib.pdf_path(pid),
-                                                 self.grobid_cfg, llm_cfg)
+                                                 self.grobid_cfg, llm_cfg,
+                                                 self.ocr_cfg)
                 else:
                     # extraction already happened in the background; say so
                     # rather than showing a blank stage until the first unit
@@ -1844,7 +1847,7 @@ def _bootstrap_users(lib, auth_cfg):
 
 def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
         tts_cfg=None, idle_exit_min=0, llm_cfg=None, auth_cfg=None,
-        secrets_cfg=None):
+        secrets_cfg=None, ocr_cfg=None):
     root = Path(root)
     if not root.exists() and not root.parent.exists():
         sys.exit(f"error: library location unavailable (is the volume "
@@ -1863,7 +1866,8 @@ def run(root, port, voice, speed, dpi, open_browser=False, grobid_cfg=None,
             sys.exit(f"error: [secrets] key is invalid ({e}). Run "
                      f"'rhapsode --gen-key' for a fresh one.")
     worker = Worker(lib, voice, speed, dpi, grobid_cfg, tts_cfg, idle_exit_min,
-                    llm_cfg, users=users, secret_key=secret_key)
+                    llm_cfg, users=users, secret_key=secret_key,
+                    ocr_cfg=ocr_cfg)
     with lib.lock:  # crash recovery: re-queue anything left mid-generation
         for pid, entry in lib.data["papers"].items():
             if entry["status"] in ("generating", "pending"):

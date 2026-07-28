@@ -28,7 +28,7 @@ def test_prefetch_extracts_next_paper_ahead(monkey=None):
     w.q.put("p2")
     calls = []
     real = server.p2a.prepare_units
-    server.p2a.prepare_units = lambda path, g, l: (calls.append(path) or
+    server.p2a.prepare_units = lambda path, g, l, *a: (calls.append(path) or
                                                    (["units"], {}, []))
     try:
         w._start_prefetch()
@@ -45,7 +45,7 @@ def test_take_prefetch_returns_none_for_a_different_paper():
     _add(lib, "p2")
     w.q.put("p2")
     real = server.p2a.prepare_units
-    server.p2a.prepare_units = lambda path, g, l: (["u"], {}, [])
+    server.p2a.prepare_units = lambda path, g, l, *a: (["u"], {}, [])
     try:
         w._start_prefetch()
         assert w._take_prefetch("SOMETHING_ELSE") is None
@@ -98,7 +98,7 @@ def test_prefetch_actually_overlaps():
     _add(lib, "p2")
     w.q.put("p2")
     real = server.p2a.prepare_units
-    server.p2a.prepare_units = lambda path, g, l: (time.sleep(0.4),
+    server.p2a.prepare_units = lambda path, g, l, *a: (time.sleep(0.4),
                                                    (["u"], {}, []))[1]
     try:
         t0 = time.time()
@@ -120,7 +120,7 @@ def test_worker_actually_processes_a_prefetched_paper():
         _add(lib, pid)
         w.q.put(pid)
     real_prep, real_gen = server.p2a.prepare_units, server.p2a.generate_readalong
-    server.p2a.prepare_units = lambda path, g, l: (["u"], {"title": "t",
+    server.p2a.prepare_units = lambda path, g, l, *a: (["u"], {"title": "t",
                                                            "authors": "a",
                                                            "year": 2024}, [])
     server.p2a.generate_readalong = lambda *a, **k: {
