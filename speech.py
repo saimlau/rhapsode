@@ -78,6 +78,29 @@ _MEASURE = re.compile(
     r"(?![A-Za-z0-9])" % (_SYM_RE, _POW_RE, _SYM_RE, _POW_RE))
 
 
+# Proper nouns and alloy designations a general-purpose TTS mangles. Respelled
+# for the SPOKEN string only — the page still shows the real word. Keep this
+# short and certain: a wrong respelling is worse than an odd one, so add a term
+# only when you know how it is actually said.
+SAY_AS = {
+    "Abaqus": "Abacus",                 # AB-uh-kus, not "a-BOK"
+    "Ti6Al4V": "titanium 6 aluminum 4 vanadium",
+    "Ti-6Al-4V": "titanium 6 aluminum 4 vanadium",
+    "TiAl6V4": "titanium aluminum 6 vanadium 4",
+    "CoCrMo": "cobalt chrome molybdenum",
+    "PEEK": "peek",                     # the polymer, said as the word
+    "in vivo": "in veevo",
+    "in vitro": "in veetro",
+}
+_SAY_AS_RE = re.compile(
+    "|".join(re.escape(k) for k in sorted(SAY_AS, key=len, reverse=True)))
+
+
+def _respell(text):
+    """Say the words a TTS gets wrong the way a person would."""
+    return _SAY_AS_RE.sub(lambda m: SAY_AS[m.group(0)], text)
+
+
 def _say(symbol, plural):
     """A unit symbol, possibly with an exponent, as words."""
     power = ""
@@ -95,15 +118,23 @@ def for_speech(text):
         return text
 
     def sub(m):
+        # A designation like "Ti-6Al-4V" or "AISI-304L" is not a measurement.
+        # A letter anywhere earlier in the SAME whitespace-delimited token says
+        # so — the hyphen alone does not, since "10-15 mm" is a real range.
+        head = m.string[:m.start()]
+        tok = m.string[max(head.rfind(" "), head.rfind("\n"),
+                           head.rfind("\t")) + 1:m.start()]
+        if re.search(r"[A-Za-z]", tok):
+            return m.group(0)
         num = m.group("num")
         try:
             plural = float(num.replace(",", "")) != 1
         except ValueError:
             plural = True
-        head = _say(m.group("unit"), plural)
-        if head is None:
+        said = _say(m.group("unit"), plural)
+        if said is None:
             return m.group(0)
-        out = f"{num} {head}"
+        out = f"{num} {said}"
         den = m.group("den")
         if den:
             # "per" reads the solidus: 2.7 g/cm3 -> grams per cubic centimeter
@@ -113,4 +144,6 @@ def for_speech(text):
             out += f" per {tail}"
         return out
 
-    return _MEASURE.sub(sub, text)
+    # units FIRST: expanding "Ti6Al4V" beforehand would leave "4 V", which the
+    # measurement rule would then read as "4 volts"
+    return _respell(_MEASURE.sub(sub, text))

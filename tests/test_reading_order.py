@@ -46,7 +46,10 @@ def test_columns_gap_split_is_deterministic():
 
 
 def test_three_columns():
-    blocks = [_b(0, 0, 40, 100), _b(1, 0, 240, 100), _b(2, 0, 440, 100)]
+    # non-overlapping, as real columns are (the old fixture's 250pt-wide
+    # blocks 200pt apart overlapped, which no layout can do)
+    blocks = [_wb(0, 0, 40, 100, 220), _wb(1, 0, 240, 100, 420),
+              _wb(2, 0, 440, 100, 600)]
     assert [b["id"] for b in _reading_order(blocks, {0: W})] == [0, 1, 2]
 
 
@@ -90,3 +93,31 @@ def test_single_column_paper_is_plain_top_down():
     blocks = [_wb(0, 0, 72, 300, 540), _wb(1, 0, 72, 100, 540),
               _wb(2, 0, 72, 200, 540)]
     assert [b["id"] for b in _reading_order(blocks, {0: 612.0})] == [1, 2, 0]
+
+
+def test_a_short_centred_fragment_is_not_spanning():
+    """A 27pt-wide 'where' at the top of the right column had its centre near
+    the page centre, so it was treated as a full-width block and became a band
+    boundary — which sorted the whole right column ahead of the left (Regal
+    et al. 2025)."""
+    blocks = [
+        _wb(1, 0, 104, 61, 232),    # left column: '2. SYSTEM DESCRIPTION'
+        _wb(2, 0, 43, 79, 260),     # left column body
+        _wb(3, 0, 407, 51, 445),    # right column equation
+        _wb(4, 0, 305, 61, 332),    # right column 'where' — centred by accident
+        _wb(5, 0, 305, 90, 555),    # right column body (fills the column)
+        _wb(6, 0, 305, 120, 555),
+    ]
+    ids = [b["id"] for b in _reading_order(blocks, {0: 595.0})]
+    assert ids.index(1) < ids.index(3), \
+        f"the left column must be read before the right: {ids}"
+    assert ids == [1, 2, 3, 4, 5, 6], ids
+
+
+def test_a_wide_centred_title_is_still_spanning():
+    blocks = [
+        _wb(9, 0, 161, 40, 450),    # centred title, 289pt wide on a 612pt page
+        _wb(0, 0, 54, 200, 290),
+        _wb(1, 0, 302, 200, 545),
+    ]
+    assert [b["id"] for b in _reading_order(blocks, {0: 612.0})] == [9, 0, 1]

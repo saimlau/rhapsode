@@ -227,11 +227,15 @@ def _compact(blocks):
     return "\n".join(lines)
 
 
-COLUMN_GAP_FRAC = 0.10   # a column break is a gap this wide, in page widths
+COLUMN_GUTTER_FRAC = 0.008  # a gutter must be this wide, in page widths (real
+                            # ones can be tight: ~7pt on a 595pt IFAC page)
+COLUMN_EMPTY_FRAC = 0.10    # ...and this empty, against the busiest column
 
 
 SPAN_WIDTH_FRAC = 0.55   # a block this wide (in page widths) spans the columns
 CENTRED_FRAC = 0.06      # ...or one whose centre sits this close to the middle
+CENTRED_MIN_WIDTH = 0.30 # ...and which is at least this wide, so a short line
+                         # centred by coincidence is not mistaken for one
 
 
 def _spans(b, page_width):
@@ -241,22 +245,61 @@ def _spans(b, page_width):
     an x0-only rule files the title under the wrong column and reads it after
     the whole left column. In a single-column paper every block is centred and
     therefore spanning, which degrades to a plain top-down sort: correct."""
-    if b["x1"] - b["x0"] > SPAN_WIDTH_FRAC * page_width:
+    width = b["x1"] - b["x0"]
+    if width > SPAN_WIDTH_FRAC * page_width:
         return True
+    # A centred TITLE is wide. A short fragment whose centre happens to land
+    # near the middle of the page ("where", an equation label at the top of the
+    # right column) is not spanning — treating it as one made it a band
+    # boundary, which sorted the whole right column ahead of the left.
+    if width < CENTRED_MIN_WIDTH * page_width:
+        return False
     centre = (b["x0"] + b["x1"]) / 2
     return abs(centre - page_width / 2) < CENTRED_FRAC * page_width
 
 
 def _columns(page_blocks, page_width):
-    """Column index per block id, by gap-splitting the left edges: sort the
-    distinct x0 values and cut wherever two consecutive edges differ by more
-    than COLUMN_GAP_FRAC of the page width. Deterministic (unlike k-means,
-    whose random init would reorder a cached paper on re-extraction) and it
-    naturally yields 1, 2 or 3 columns without choosing a k."""
-    xs = sorted({round(b["x0"], 1) for b in page_blocks})
-    cuts = [(a + b) / 2 for a, b in zip(xs, xs[1:])
-            if b - a > COLUMN_GAP_FRAC * page_width]
-    return {b["id"]: sum(1 for c in cuts if b["x0"] > c) for b in page_blocks}
+    """Column index per block id, from the page's vertical GUTTERS.
+
+    Project every block onto the x axis WEIGHTED BY ITS HEIGHT, then find the
+    bands that stay nearly empty down the page. Two cheaper rules both fail on
+    real papers: splitting on left edges alone cannot tell an indented heading
+    from a column (one paper's left column started at both x=43 and x=104, so
+    every block became its own column and the right-hand column was read
+    first), and a plain union of x-ranges is erased by a single wide block —
+    a footnote or a figure — bridging the gutter. Weighting by height means
+    such a block contributes only its own height, so a gutter that is empty
+    for most of the page survives it.
+
+    Deterministic, and it yields 1, 2 or 3 columns without choosing a k."""
+    if not page_blocks:
+        return {}
+    bins = 240
+    step = page_width / bins if page_width else 1.0
+    cover = [0.0] * bins
+    for b in page_blocks:
+        h = max(0.0, b["y1"] - b["y0"])
+        lo = max(0, min(bins - 1, int(b["x0"] / step)))
+        hi = max(0, min(bins - 1, int(b["x1"] / step)))
+        for i in range(lo, hi + 1):
+            cover[i] += h
+    peak = max(cover)
+    if peak <= 0:
+        return {b["id"]: 0 for b in page_blocks}
+    first = next(i for i, c in enumerate(cover) if c > 0)
+    last = bins - 1 - next(i for i, c in enumerate(reversed(cover)) if c > 0)
+    thresh = COLUMN_EMPTY_FRAC * peak
+    min_bins = max(1, round(COLUMN_GUTTER_FRAC * bins))
+    gutters, run = [], 0
+    for i in range(first, last + 1):     # margins are not gutters
+        if cover[i] <= thresh:
+            run += 1
+        else:
+            if run >= min_bins:
+                gutters.append((i - run / 2) * step)
+            run = 0
+    return {b["id"]: sum(1 for g in gutters if b["x0"] >= g)
+            for b in page_blocks}
 
 
 def _reading_order(blocks, widths):

@@ -38,9 +38,9 @@ def test_a_unit_without_a_number_is_left_alone():
 
 
 def test_alloy_designations_are_not_measurements():
-    """Ti6Al4V must not become 'Ti6Al4 volts' — a digit inside an identifier
-    is not a quantity."""
-    assert for_speech("Ti6Al4V scaffolds") == "Ti6Al4V scaffolds"
+    """A digit inside an identifier is not a quantity: Ti6Al4V must never be
+    read as '...4 volts'. (It IS spelled out by SAY_AS — see below.)"""
+    assert "volts" not in for_speech("Ti6Al4V scaffolds")
     assert for_speech("printed in 3D") == "printed in 3D"
 
 
@@ -65,3 +65,26 @@ if __name__ == "__main__":
     for n, f in sorted(globals().items()):
         if n.startswith("test_") and callable(f):
             f(); print("ok", n)
+
+
+def test_mispronounced_names_are_respelled():
+    """Kokoro says Abaqus as 'a-BOK'; a person says AB-uh-kus."""
+    assert "Abacus" in for_speech("run in Abaqus")
+    assert "Abaqus" not in for_speech("run in Abaqus")
+
+
+def test_alloy_designations_are_spelled_out_not_measured():
+    """Ti-6Al-4V must not become 'Ti-6Al-4 volts' — the hyphen is part of an
+    identifier, not a range separator."""
+    out = for_speech("Ti-6Al-4V and Ti6Al4V samples")
+    assert "volts" not in out
+    assert out.count("titanium 6 aluminum 4 vanadium") == 2
+
+
+def test_a_real_range_still_expands():
+    assert for_speech("10-15 mm") == "10-15 millimeters"
+    assert for_speech("0.1-0.94 mm") == "0.1-0.94 millimeters"
+
+
+def test_alphanumeric_grades_are_left_alone():
+    assert for_speech("AISI-304L at 276 MPa") == "AISI-304L at 276 megapascals"
