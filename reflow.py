@@ -361,8 +361,16 @@ def _join_dropcap(tokens):
             skip = False
             continue
         nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+        # What follows a drop cap is the REST of its word, which may be set in
+        # small caps ("A" + "S ROBOT manipulators" is "AS ROBOT ..."), not only
+        # in lower case ("R" + "econstruction"). A lone capital is never an
+        # English word apart from A and I, so treating it as a fragment is safe
+        # — and "A" + "FULLY autonomous" stays two words, as it should.
+        frag = bool(nxt) and (nxt[0][:1].islower()
+                              or (len(nxt[0]) == 1 and nxt[0].isupper()
+                                  and nxt[0] not in ("A", "I")))
         if (nxt and len(text) == 1 and text.isupper() and boxes and nxt[1]
-                and nxt[0][:1].islower()):
+                and frag):
             cap_h = boxes[0][4] - boxes[0][2]
             word_h = nxt[1][0][4] - nxt[1][0][2]
             if word_h > 0 and cap_h >= word_h * DROPCAP_RATIO:
@@ -598,12 +606,14 @@ def extract_document(pdf_path, llm_cfg):
         raise llm.LLMError("LLM kept no content blocks")
 
     units = []
-    para = []  # accumulating body tokens across continuation blocks
+    para = []      # accumulating body tokens across continuation blocks
+    dangling = [False]   # the previous body block ended mid-word (hyphen)
 
     def flush():
         if para:
             units.extend(_sentence_units(list(para)))
             para.clear()
+        dangling[0] = False
 
     for i in order:
         blk = byid[i]
@@ -631,7 +641,16 @@ def extract_document(pdf_path, llm_cfg):
                               "para_end": False, "pause": HEADING_PAUSE_S})
             continue
         toks = _tokens(blk["words"])
+        # A word hyphenated across a BLOCK boundary ("...be-" + "tween") is one
+        # word, exactly as it is within a block. _tokens only ever sees inside
+        # one block, so the seam is welded here — otherwise the paragraph is
+        # narrated as "be tween". (_tokens has already stripped the hyphen from
+        # the dangling token, so the two halves concatenate directly.)
+        if dangling[0] and para and toks:
+            para[-1] = (para[-1][0] + toks[0][0], para[-1][1] + toks[0][1])
+            toks = toks[1:]
         para.extend(toks)
+        dangling[0] = blk["text"].rstrip().endswith("-")
         # a block that ends a sentence closes the paragraph; one that doesn't
         # (e.g. GROBID's dropped chunk) continues into the next content block
         if toks and _SENT_END.search(toks[-1][0]) and not _is_abbrev(toks[-1][0]):
