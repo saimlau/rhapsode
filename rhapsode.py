@@ -24,6 +24,7 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
+import speech
 from config import load_config, library_path
 from extraction import (MappedText, clean_mapped, clean_text,
                         extract_segments, merge_continuations, split_sentences)
@@ -320,7 +321,10 @@ def _local_unit_audio(units, voice, speed):
             yield unit, []
             continue
         with TTS_LOCK:
-            results = list(pipeline(unit["text"], voice=voice, speed=speed))
+            # spoken form only: "68.9 GPa" is SAID "68.9 gigapascals" while the
+            # page still shows, and highlights, the original symbols
+            results = list(pipeline(speech.for_speech(unit["text"]),
+                                    voice=voice, speed=speed))
         chunks = []
         for item in results:
             audio = getattr(item, "audio", None)
@@ -390,7 +394,7 @@ def _modal_unit_audio(units, voice, speed, tts_cfg, batch=8, lookahead=4):
     for ui, u in enumerate(units):
         if not u["text"].strip():        # silent unit: no request, no cost
             continue
-        for piece in _pieces(u["text"]):
+        for piece in _pieces(speech.for_speech(u["text"])):
             flat.append((ui, piece))
     groups = [flat[i:i + batch] for i in range(0, len(flat), batch)]
 
