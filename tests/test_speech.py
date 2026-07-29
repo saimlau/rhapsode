@@ -88,3 +88,38 @@ def test_a_real_range_still_expands():
 
 def test_alphanumeric_grades_are_left_alone():
     assert for_speech("AISI-304L at 276 MPa") == "AISI-304L at 276 megapascals"
+
+
+def test_initialisms_espeak_says_as_words_are_spelled_out():
+    """espeak renders these as words — "eck-um", "eb-um", "hum", "fee",
+    "ike-mee", "roy" — so they are spelled out instead."""
+    out = for_speech("FEA of the ECM and EBM with HMM; ROI and ICME")
+    for want in ["F E A", "E C M", "E B M", "H M M", "R O I", "I C M E"]:
+        assert want in out, f"{want} missing from {out!r}"
+
+
+def test_plural_initialism_wins_over_the_singular():
+    """Longest-first plus boundaries: HMM must not fire inside HMMs."""
+    assert for_speech("HMMs and HMM") == "H M Ms and H M M"
+    assert "M S Cs" in for_speech("the MSCs were counted")
+
+
+def test_software_names_are_respelled():
+    out = for_speech("run in Abaqus, ANSYS and COMSOL")
+    assert "Abacus" in out and "Ansis" in out and "Komsol" in out
+
+
+def test_alloys_and_compounds():
+    assert "nickel titanium" in for_speech("a NiTi wire")
+    assert "titanium carbide" in for_speech("a TiC coating")
+
+
+def test_a_term_never_fires_inside_a_longer_token():
+    """TiC must not fire inside TiCl4, nor ECM inside ECMO."""
+    assert for_speech("TiCl4 and ECMO and HMMx") == "TiCl4 and ECMO and HMMx"
+
+
+def test_poisson_is_deliberately_left_alone():
+    """espeak splits every 'pw' spelling into 'P-W' ("PEE-wasson"), which is
+    worse than its plain "POY-son" — so it is not in the table."""
+    assert for_speech("the Poisson ratio") == "the Poisson ratio"

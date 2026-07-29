@@ -78,22 +78,46 @@ _MEASURE = re.compile(
     r"(?![A-Za-z0-9])" % (_SYM_RE, _POW_RE, _SYM_RE, _POW_RE))
 
 
-# Proper nouns and alloy designations a general-purpose TTS mangles. Respelled
-# for the SPOKEN string only — the page still shows the real word. Keep this
-# short and certain: a wrong respelling is worse than an odd one, so add a term
-# only when you know how it is actually said.
+# Terms a general-purpose TTS mangles, respelled for the SPOKEN string only —
+# the page still shows the real word. Every entry below was CHECKED against
+# espeak-ng (the phonemiser Kokoro uses) rather than guessed: the left side is
+# what it gets wrong, the right side is a spelling that produces the right
+# sounds. Candidates came from the library's own vocabulary, so this is tuned
+# to the papers actually being read.
+#
+# Keep it short and certain. A wrong respelling is worse than an odd one:
+# "Poisson" is left alone because espeak splits every "pw" spelling into
+# "P-W" ("PEE-wasson"), which is worse than its plain "POY-son".
 SAY_AS = {
-    "Abaqus": "Abacus",                 # AB-uh-kus, not "a-BOK"
+    # software (espeak: "a-BAHKS", "AN-ziz", "kum-SOL")
+    "Abaqus": "Abacus",
+    "ANSYS": "Ansis",
+    "COMSOL": "Komsol",
+    # alloys and compounds (espeak: "nye-tye", "tie-see")
     "Ti6Al4V": "titanium 6 aluminum 4 vanadium",
     "Ti-6Al-4V": "titanium 6 aluminum 4 vanadium",
     "TiAl6V4": "titanium aluminum 6 vanadium 4",
     "CoCrMo": "cobalt chrome molybdenum",
-    "PEEK": "peek",                     # the polymer, said as the word
-    "in vivo": "in veevo",
+    "NiTi": "nickel titanium",
+    "TiC": "titanium carbide",
+    # initialisms espeak tries to say as words ("eck-um", "eb-um", "hum",
+    # "fee", "ike-mee", "roy")
+    "ECM": "E C M",
+    "EBM": "E B M",
+    "HMMs": "H M Ms",
+    "HMM": "H M M",
+    "FEA": "F E A",
+    "ICME": "I C M E",
+    "ROI": "R O I",
+    "MSCs": "M S Cs",
+    # Latin (espeak: "VIT-roh"; it already says vivo correctly)
     "in vitro": "in veetro",
 }
+# Bounded so a term never matches inside a longer token: "HMM" must not fire
+# inside "HMMs", nor "TiC" inside "TiCl4".
 _SAY_AS_RE = re.compile(
-    "|".join(re.escape(k) for k in sorted(SAY_AS, key=len, reverse=True)))
+    r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])"
+    % "|".join(re.escape(k) for k in sorted(SAY_AS, key=len, reverse=True)))
 
 
 def _respell(text):
