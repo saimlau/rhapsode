@@ -104,6 +104,11 @@ button.pri { font: 600 .8rem var(--sans); color: var(--desk); background: var(--
   </section>
 
   <section class="card">
+    <h2>Reported issues</h2>
+    <ul id="issues"><li class="empty">…</li></ul>
+  </section>
+
+  <section class="card">
     <h2>Health</h2>
     <ul id="health"><li class="empty">…</li></ul>
   </section>
@@ -148,6 +153,21 @@ async function load() {
         data-cur="${cap == null ? "" : cap}">${cap == null ? "Set cap" : "Change"}</button>
       </li>`;
   }).join("");
+
+  try {
+    const ir = await fetch("/api/issues");
+    const issues = ir.ok ? (await ir.json()).issues || [] : [];
+    $("#issues").innerHTML = issues.length ? issues.map(i => `
+      <li><span class="who">${esc(i.title || i.paper || "—")}</span>
+          <span class="tag">${esc(i.kind)}</span>
+          <span class="n">${i.who ? esc(i.who) + " · " : ""}${when(i.when)}${
+            i.paper ? ` · <a href="/?play=${encodeURIComponent(i.paper)}">open</a>` : ""}</span>
+      </li>
+      <li style="padding-top:0"><span class="n" style="white-space:normal">
+          ${esc(i.note)}${i.heard ? `<br><i>heard:</i> ${esc(String(i.heard).slice(0, 160))}` : ""}
+      </span></li>`).join("")
+      : `<li class="empty">Nothing reported.</li>`;
+  } catch { $("#issues").innerHTML = `<li class="empty">Could not load reports.</li>`; }
 
   const h = d.health || {};
   $("#health").innerHTML = `

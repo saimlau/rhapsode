@@ -822,6 +822,70 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         return _login_cookie(
             Response(status_code=303, headers={"Location": "/dashboard"}), who)
 
+    ISSUE_KINDS = ("pronunciation", "missing text", "wrong order",
+                   "audio", "extraction", "other")
+
+    def _unit_at(pid, t):
+        """The sentence being read at `t` — what makes a report actionable.
+        A report saying "mispronounced" cannot be acted on; one carrying the
+        text, the paper and the timestamp can."""
+        try:
+            man = json.loads((lib.view_dir(pid) / "manifest.json").read_text())
+        except Exception:
+            return ""
+        best = ""
+        for u in man.get("units", []):
+            if u.get("t0", 0) <= t:
+                best = u.get("text") or best
+            else:
+                break
+        return best[:400]
+
+    @app.post("/api/issues")
+    def report_issue(request: Request, body: dict):
+        pid = str(body.get("paper") or "")
+        if pid:
+            see(pid, request)          # 404 for a paper this caller cannot see
+        kind = str(body.get("kind") or "other")
+        if kind not in ISSUE_KINDS:
+            kind = "other"
+        note = str(body.get("note") or "").strip()[:2000]
+        if not note and not pid:
+            raise HTTPException(400, "say what went wrong")
+        try:
+            at = float(body.get("t") or 0)
+        except (TypeError, ValueError):
+            at = 0.0
+        entry = {"when": time.time(), "who": caller(request), "paper": pid,
+                 "title": (lib.data["papers"].get(pid) or {}).get("title"),
+                 "t": round(at, 1), "kind": kind, "note": note,
+                 "heard": _unit_at(pid, at) if pid else ""}
+        path = lib.root / "issues.jsonl"
+        with lib.lock:                 # one writer; a report must never be lost
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            try:
+                os.chmod(path, 0o600)  # reports can quote a private paper
+            except OSError:
+                pass
+        return {"ok": True}
+
+    @app.get("/api/issues")
+    def list_issues(request: Request, limit: int = 50):
+        who = caller(request)
+        if multiuser and not (who and users.is_admin(who)):
+            raise HTTPException(404, "not found")
+        path = lib.root / "issues.jsonl"
+        if not path.is_file():
+            return {"issues": []}
+        out = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+        return {"issues": out[-max(1, min(limit, 200)):][::-1]}
+
     @app.get("/api/me")
     def whoami(request: Request):
         who = caller(request)

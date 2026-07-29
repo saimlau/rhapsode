@@ -155,6 +155,17 @@ body { display: flex; flex-direction: column; background: var(--desk);
 }
 #side footer { display: flex; align-items: center; justify-content: space-between; }
 #side footer label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+#reportBtn { background: none; border: 0; padding: 0; cursor: pointer;
+             color: var(--muted); font-family: var(--mono); font-size: 11px;
+             letter-spacing: .06em; }
+#reportBtn:hover { color: var(--ink); box-shadow: inset 0 -6px 0 var(--marker-wash); }
+.modal select, .modal textarea {
+  width: 100%; box-sizing: border-box; margin-bottom: 12px; padding: 8px 10px;
+  border: 1px solid var(--hairline); border-radius: 7px; font: 13px var(--sans);
+  background: var(--desk); color: var(--ink); }
+.modal textarea { min-height: 90px; resize: vertical; }
+.modal .ctx { font: 11px var(--mono); color: var(--muted); margin: 0 0 12px;
+  padding-left: 8px; border-left: 2px solid var(--marker); }
 #dashLink, #setLink { color: var(--muted); text-decoration: none; font-family: var(--mono);
             font-size: 11px; letter-spacing: .06em; }
 #dashLink:hover, #setLink:hover { color: var(--ink); box-shadow: inset 0 -6px 0 var(--marker-wash); }
@@ -276,6 +287,7 @@ body { display: flex; flex-direction: column; background: var(--desk);
   <div id="none">No paper matches that.</div>
   <footer>
     <label><input id="autoadv" type="checkbox"> Auto-advance</label>
+    <button id="reportBtn" title="Report a problem with this paper">Report</button>
     <a id="setLink" href="/settings">Settings</a>
     <a id="dashLink" href="/dashboard">Dashboard</a>
   </footer>
@@ -291,7 +303,7 @@ body { display: flex; flex-direction: column; background: var(--desk);
 "use strict";
 const $ = id => document.getElementById(id);
 let state = { papers: {}, order: [], playlists: {}, settings: {} };
-let currentId = null, dragId = null, dragAt = 0;
+let currentId = null, dragId = null, dragAt = 0, lastT = 0;
 let activePl = localStorage.getItem("rhapsode.activePl") || localStorage.getItem("paper2audio.activePl") || null;
 localStorage.removeItem("paper2audio.activePl");  // one-time migration
 if (activePl) localStorage.setItem("rhapsode.activePl", activePl);
@@ -337,6 +349,54 @@ function askConfirm(message, okLabel = "OK") {
     },
   });
 }
+const ISSUE_KINDS = [
+  ["pronunciation", "A word is pronounced wrongly"],
+  ["missing text", "Text is missing from the narration"],
+  ["wrong order", "It reads in the wrong order"],
+  ["extraction", "It reads something it should skip"],
+  ["audio", "Audio or timing problem"],
+  ["other", "Something else"],
+];
+async function reportIssue() {
+  const paper = currentId ? state.papers[currentId] : null;
+  const at = Math.round(lastT || 0);
+  const note = await _modal({
+    cancel: null,
+    enter: () => undefined,          // Enter is for newlines in the textarea
+    focus: box => box.querySelector("textarea").focus(),
+    render(box, close) {
+      const h = document.createElement("p");
+      h.textContent = "Report a problem";
+      const ctx = document.createElement("p");
+      ctx.className = "ctx";
+      ctx.textContent = paper
+        ? `${paper.title || currentId} — at ${fmt(at)}`
+        : "No paper is open; this will be reported on its own.";
+      const sel = document.createElement("select");
+      for (const [v, label] of ISSUE_KINDS) {
+        const o = document.createElement("option");
+        o.value = v; o.textContent = label; sel.appendChild(o);
+      }
+      const ta = document.createElement("textarea");
+      ta.placeholder = "What went wrong? Quoting the words you heard helps.";
+      const row = document.createElement("div"); row.className = "modal-row";
+      const cancel = document.createElement("button"); cancel.textContent = "Cancel";
+      const ok = document.createElement("button"); ok.textContent = "Send";
+      ok.className = "pri";
+      cancel.onclick = () => close(null);
+      ok.onclick = () => close({ kind: sel.value, note: ta.value.trim() });
+      row.append(cancel, ok);
+      box.append(h, ctx, sel, ta, row);
+    },
+  });
+  if (!note) return;
+  try {
+    const r = await fetch("/api/issues", { method: "POST",
+      ...jbody({ paper: currentId || "", t: at, kind: note.kind, note: note.note }) });
+    toast(r.ok ? "Thanks — reported." : "Could not send that report");
+  } catch { toast("Could not send that report"); }
+}
+
 function askPrompt(message, def = "") {
   let input;
   return _modal({
@@ -595,6 +655,7 @@ addEventListener("message", e => {
   if (m.type === "drop") { acceptFiles(m.files || []); return; }
   if (!currentId) return;
   if (m.type === "position") {
+    lastT = m.t;
     fetch(`/api/papers/${currentId}/position`, { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ t: m.t }) });
@@ -876,6 +937,7 @@ async function upload(files) {
     } catch { toast(`upload failed: ${f.name}`); }
   }
 }
+$("reportBtn").addEventListener("click", reportIssue);
 $("drop").onclick = () => $("file").click();
 $("file").onchange = () => { upload([...$("file").files]); $("file").value = ""; };
 // Overlay driven by drag "pings" from this page AND the embedded viewer
