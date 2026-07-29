@@ -143,3 +143,45 @@ def test_both_roi_and_rom_are_spelled_out():
     """Both are overloaded (region of interest / read-only memory), so the
     letters are what a reader wants either way."""
     assert for_speech("ROI and ROM") == "R O I and R O M"
+
+
+def test_formula_subscripts_are_split_from_symbols():
+    """Kokoro reads the join as a word: "Al2O3" came out "AL-too-oh-three"
+    and "H2O" "AITCH-too-oh"."""
+    assert for_speech("Al2O3") == "aluminum 2 O 3"
+    assert for_speech("H2O") == "H 2 O"
+
+
+def test_symbols_kokoro_cannot_say_use_the_element_name():
+    """It has no entry at all for "Mg", and reads "Al" as the name Al.
+    Spelling them out fails too — a lone "A" becomes the article."""
+    assert for_speech("Mg2") == "magnesium 2"
+    assert "aluminum" in for_speech("Al2O3")
+
+
+def test_formulas_that_already_sounded_right_are_untouched():
+    """CO2 is said "C-O two" and TiO2 "T-I-O two" already."""
+    assert for_speech("CO2") == "CO2"
+    assert for_speech("TiO2") == "TiO2"
+
+
+def test_part_codes_are_not_broken_by_the_formula_rule():
+    """C3D4 (an element type), WE43 (an alloy) and SS316L (a steel) are shaped
+    like formulas but already spoken correctly."""
+    out = for_speech("C3D4 and WE43 and SS316L")
+    assert "WE43" in out and "SS316L" in out
+    assert out.startswith("C 3 D 4")      # same sounds as before, spaced
+
+
+def test_nothing_the_g2p_cannot_pronounce_is_produced():
+    """Every expansion must survive Kokoro's own phonemiser."""
+    try:
+        from misaki import en, espeak
+        g2p = en.G2P(trf=False, british=False,
+                     fallback=espeak.EspeakFallback(british=False))
+    except Exception:
+        return
+    for t in ["68.9 GPa", "2.7 g/cm3", "Al2O3", "Mg2", "the Poisson ratio",
+              "run in Abaqus with NiTi", "ROI and ROM", "37 °C"]:
+        ps, _ = g2p(for_speech(t))
+        assert "❓" not in ps, f"{t!r} -> unpronounceable {ps!r}"

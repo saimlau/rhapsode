@@ -129,6 +129,29 @@ _SAY_AS_RE = re.compile(
     % "|".join(re.escape(k) for k in sorted(SAY_AS, key=len, reverse=True)))
 
 
+# A formula glues element symbols to subscripts, and Kokoro reads the join as
+# a word: "Al2O3" comes out "AL-too-oh-three" and "H2O" "AITCH-too-oh". Split
+# the runs so each part is spoken on its own. Codes shaped the same way
+# ("C3D4", "WE43", "SS316L") already sounded right and are unchanged by this.
+_FORMULA = re.compile(r"(?<![A-Za-z0-9])((?:[A-Z][a-z]?\d+)+[A-Z]?[a-z]?)"
+                      r"(?![A-Za-z0-9])")
+# Two-letter symbols Kokoro cannot say: it has no entry for "Mg" at all and
+# reads "Al" as the name Al. Spelling them as letters does not work either —
+# a lone "A" becomes the article ("uh"). Their names are unambiguous.
+_ELEMENTS = {"Mg": "magnesium", "Al": "aluminum", "Zr": "zirconium",
+             "Nb": "niobium", "Ta": "tantalum", "Mn": "manganese",
+             "Zn": "zinc", "Cu": "copper", "Ag": "silver", "Sn": "tin"}
+
+
+def _split_formula(tok):
+    parts = re.findall(r"[A-Z][a-z]?|\d+", tok)
+    return " ".join(_ELEMENTS.get(p, p) for p in parts)
+
+
+def _formulas(text):
+    return _FORMULA.sub(lambda m: _split_formula(m.group(1)), text)
+
+
 def _respell(text):
     """Say the words a TTS gets wrong the way a person would."""
     return _SAY_AS_RE.sub(lambda m: SAY_AS[m.group(0)], text)
@@ -179,4 +202,4 @@ def for_speech(text):
 
     # units FIRST: expanding "Ti6Al4V" beforehand would leave "4 V", which the
     # measurement rule would then read as "4 volts"
-    return _respell(_MEASURE.sub(sub, text))
+    return _formulas(_respell(_MEASURE.sub(sub, text)))
