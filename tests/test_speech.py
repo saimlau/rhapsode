@@ -119,7 +119,27 @@ def test_a_term_never_fires_inside_a_longer_token():
     assert for_speech("TiCl4 and ECMO and HMMx") == "TiCl4 and ECMO and HMMx"
 
 
-def test_poisson_is_deliberately_left_alone():
-    """espeak splits every 'pw' spelling into 'P-W' ("PEE-wasson"), which is
-    worse than its plain "POY-son" — so it is not in the table."""
-    assert for_speech("the Poisson ratio") == "the Poisson ratio"
+def test_poisson_uses_a_phoneme_override():
+    """No RESPELLING works — espeak reads every "pw" as "P-W" ("PEE-wasson") —
+    so Kokoro is given the phonemes outright via misaki's markdown override."""
+    out = for_speech("the Poisson ratio")
+    assert "pw" in out and "/" in out, out
+    assert out.startswith("the [Poisson](/") and out.endswith(") ratio"), out
+
+
+def test_the_phoneme_override_is_honoured_by_the_g2p():
+    """The override must reach Kokoro as PHONEMES, not as literal brackets."""
+    try:
+        from misaki import en
+    except Exception:
+        return                      # kokoro/misaki not installed in this env
+    g2p = en.G2P(trf=False, british=False, fallback=None)
+    ps, _ = g2p(for_speech("the Poisson ratio"))
+    assert "pw" in ps, f"phonemes not applied: {ps!r}"
+    assert "[" not in ps and "/" not in ps, f"brackets leaked into speech: {ps!r}"
+
+
+def test_both_roi_and_rom_are_spelled_out():
+    """Both are overloaded (region of interest / read-only memory), so the
+    letters are what a reader wants either way."""
+    assert for_speech("ROI and ROM") == "R O I and R O M"

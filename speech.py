@@ -85,9 +85,9 @@ _MEASURE = re.compile(
 # sounds. Candidates came from the library's own vocabulary, so this is tuned
 # to the papers actually being read.
 #
-# Keep it short and certain. A wrong respelling is worse than an odd one:
-# "Poisson" is left alone because espeak splits every "pw" spelling into
-# "P-W" ("PEE-wasson"), which is worse than its plain "POY-son".
+# Keep it short and certain: a wrong respelling is worse than an odd one. When
+# no ordinary spelling produces the right sounds, use the phoneme override at
+# the end of this table instead of guessing.
 SAY_AS = {
     # software (espeak: "a-BAHKS", "AN-ziz", "kum-SOL")
     "Abaqus": "Abacus",
@@ -109,9 +109,18 @@ SAY_AS = {
     "FEA": "F E A",
     "ICME": "I C M E",
     "ROI": "R O I",
+    "ROM": "R O M",       # range of motion here, read-only memory elsewhere:
+                          # either way the letters are what a reader wants
     "MSCs": "M S Cs",
     # Latin (espeak: "VIT-roh"; it already says vivo correctly)
     "in vitro": "in veetro",
+    # Where no respelling works, give Kokoro the phonemes outright. misaki
+    # honours a markdown-style override, [word](/phonemes/), and applies it on
+    # the Modal endpoint too — verified by timing: repeating the phonemes three
+    # times made the spoken word three times longer, so they really are used
+    # rather than the brackets simply being stripped. Every "pw" RESPELLING is
+    # read "PEE-w...", so Poisson can only be fixed this way.
+    "Poisson": "[Poisson](/pwɑsˈɔn/)",
 }
 # Bounded so a term never matches inside a longer token: "HMM" must not fire
 # inside "HMMs", nor "TiC" inside "TiCl4".
