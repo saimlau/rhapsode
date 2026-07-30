@@ -1807,6 +1807,18 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
             lib.update(pid, bump=False, persist=False,
                        last_opened=time.time(), last_playlist=context)
         base = lib.view_dir(pid).resolve()
+        if path in ("", "index.html"):
+            # Serve the ONE canonical viewer, not the copy frozen into this
+            # paper when it was generated. Every paper then gets the current
+            # reader — a viewer fix used to reach only papers generated after
+            # it shipped, so improving the reader meant re-narrating the whole
+            # library. The viewer fetches manifest.json (served below) itself,
+            # which also keeps a 16 MB manifest out of the HTML response.
+            canonical = REPO / "viewer.html"
+            if canonical.is_file() and (base / "manifest.json").is_file():
+                resp = HTMLResponse(canonical.read_text(encoding="utf-8"))
+                resp.headers["Cache-Control"] = "no-cache"
+                return resp
         target = (base / (path or "index.html")).resolve()
         if base != target and base not in target.parents:
             raise HTTPException(403, "path outside paper folder")

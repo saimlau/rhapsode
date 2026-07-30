@@ -743,6 +743,13 @@ def _json_for_script(obj):
 
 
 def write_viewer(out_dir, manifest):
+    """Write the paper's manifest, plus a SELF-CONTAINED index.html beside it.
+
+    The server does not serve this index.html — it serves the repo's viewer.html
+    and lets it fetch manifest.json, so reader improvements reach every paper
+    without regenerating audio. This copy exists so a bundle folder can be
+    copied to a tablet and opened from file://, where fetch() is blocked and
+    the data has to be inlined."""
     template = Path(__file__).resolve().parent / "viewer.html"
     data = json.dumps(manifest, ensure_ascii=False)
     if template.is_file():

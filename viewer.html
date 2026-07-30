@@ -173,9 +173,14 @@ button.ctl svg { width: 16px; height: 16px; fill: currentColor; }
 
 <script>
 "use strict";
-const DATA = /*__PAPER_DATA__*/null;
-if (!DATA) document.body.innerHTML = "<p style='font:15px system-ui;padding:40px'>" +
-  "No paper data. Generate this view with: rhapsode &lt;paper.pdf&gt; --readalong</p>";
+// Two ways this page gets its paper. The SERVER serves this file as-is, so
+// DATA is still null and the manifest is fetched alongside it — that way one
+// canonical viewer serves every paper and improvements reach the whole library
+// without regenerating any audio. A bundle written to disk by --readalong
+// instead has the manifest substituted in below, because a folder opened from
+// file:// cannot fetch (the browser blocks it), and staying self-contained is
+// the point of a bundle.
+let DATA = /*__PAPER_DATA__*/null;
 
 const $ = id => document.getElementById(id);
 const audio = $("audio");
@@ -186,7 +191,18 @@ const save = () => localStorage.setItem("rhapsode.viewer", JSON.stringify(store)
 
 let units = [], sections = [], active = -1, activeSub = -1, follow = true, progScroll = 0;
 
-if (DATA) init();
+if (DATA) {
+  init();
+} else {
+  fetch("manifest.json", { cache: "no-cache" })
+    .then(r => (r.ok ? r.json() : null))
+    .then(d => { if (!d) throw new Error("no manifest"); DATA = d; init(); })
+    .catch(() => {
+      document.body.innerHTML =
+        "<p style='font:15px system-ui;padding:40px'>No paper data. Generate " +
+        "this view with: rhapsode &lt;paper.pdf&gt; --readalong</p>";
+    });
+}
 
 function init() {
   document.title = DATA.title;
