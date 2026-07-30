@@ -155,10 +155,8 @@ body { display: flex; flex-direction: column; background: var(--desk);
 }
 #side footer { display: flex; align-items: center; justify-content: space-between; }
 #side footer label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
-#reportBtn { background: none; border: 0; padding: 0; cursor: pointer;
-             color: var(--muted); font-family: var(--mono); font-size: 11px;
-             letter-spacing: .06em; }
-#reportBtn:hover { color: var(--ink); box-shadow: inset 0 -6px 0 var(--marker-wash); }
+#side footer .hint { font: 10.5px var(--mono); color: var(--muted); opacity: .8;
+                     text-align: right; max-width: 150px; line-height: 1.35; }
 .modal select, .modal textarea {
   width: 100%; box-sizing: border-box; margin-bottom: 12px; padding: 8px 10px;
   border: 1px solid var(--hairline); border-radius: 7px; font: 13px var(--sans);
@@ -166,9 +164,6 @@ body { display: flex; flex-direction: column; background: var(--desk);
 .modal textarea { min-height: 90px; resize: vertical; }
 .modal .ctx { font: 11px var(--mono); color: var(--muted); margin: 0 0 12px;
   padding-left: 8px; border-left: 2px solid var(--marker); }
-#dashLink, #setLink { color: var(--muted); text-decoration: none; font-family: var(--mono);
-            font-size: 11px; letter-spacing: .06em; }
-#dashLink:hover, #setLink:hover { color: var(--ink); box-shadow: inset 0 -6px 0 var(--marker-wash); }
 #autoadv { accent-color: var(--marker); }
 
 /* the hamburger + drawer close button live only on narrow screens */
@@ -255,6 +250,7 @@ body { display: flex; flex-direction: column; background: var(--desk);
   <nav>
     <a href="/dashboard">Home</a>
     <a class="here" href="/">Library</a>
+    <a href="/settings">Settings</a>
     <a id="manageLink" href="/admin" hidden>Manage</a>
     <form method="post" action="/logout" style="display:inline">
       <button class="out" type="submit">Sign out</button>
@@ -287,9 +283,7 @@ body { display: flex; flex-direction: column; background: var(--desk);
   <div id="none">No paper matches that.</div>
   <footer>
     <label><input id="autoadv" type="checkbox"> Auto-advance</label>
-    <button id="reportBtn" title="Report a problem with this paper">Report</button>
-    <a id="setLink" href="/settings">Settings</a>
-    <a id="dashLink" href="/dashboard">Dashboard</a>
+    <span class="hint">right-click a paper to report a problem</span>
   </footer>
 </aside>
 </div>
@@ -357,9 +351,24 @@ const ISSUE_KINDS = [
   ["audio", "Audio or timing problem"],
   ["other", "Something else"],
 ];
-async function reportIssue() {
-  const paper = currentId ? state.papers[currentId] : null;
-  const at = Math.round(lastT || 0);
+// Text the reader has selected — in the reading pane (a same-origin iframe) or
+// in the sidebar. Quoting what they were looking at is the most useful thing a
+// report can carry, and it saves them retyping it.
+function selectedText() {
+  for (const w of [$("frame") && $("frame").contentWindow, window]) {
+    try {
+      const t = w && String(w.getSelection() || "").trim();
+      if (t) return t.replace(/\s+/g, " ").slice(0, 300);
+    } catch { /* cross-origin: nothing to read */ }
+  }
+  return "";
+}
+
+async function reportIssue(pid) {
+  const about = pid || currentId;
+  const paper = about ? state.papers[about] : null;
+  const at = Math.round(about === currentId ? (lastT || 0) : 0);
+  const sel = selectedText();
   const note = await _modal({
     cancel: null,
     enter: () => undefined,          // Enter is for newlines in the textarea
@@ -370,7 +379,7 @@ async function reportIssue() {
       const ctx = document.createElement("p");
       ctx.className = "ctx";
       ctx.textContent = paper
-        ? `${paper.title || currentId} — at ${fmt(at)}`
+        ? `${paper.title || about}${at ? ` — at ${fmt(at)}` : ""}`
         : "No paper is open; this will be reported on its own.";
       const sel = document.createElement("select");
       for (const [v, label] of ISSUE_KINDS) {
@@ -379,6 +388,7 @@ async function reportIssue() {
       }
       const ta = document.createElement("textarea");
       ta.placeholder = "What went wrong? Quoting the words you heard helps.";
+      if (sel) ta.value = `selected text: "${sel}"\n\n`;
       const row = document.createElement("div"); row.className = "modal-row";
       const cancel = document.createElement("button"); cancel.textContent = "Cancel";
       const ok = document.createElement("button"); ok.textContent = "Send";
@@ -392,7 +402,7 @@ async function reportIssue() {
   if (!note) return;
   try {
     const r = await fetch("/api/issues", { method: "POST",
-      ...jbody({ paper: currentId || "", t: at, kind: note.kind, note: note.note }) });
+      ...jbody({ paper: about || "", t: at, kind: note.kind, note: note.note }) });
     toast(r.ok ? "Thanks — reported." : "Could not send that report");
   } catch { toast("Could not send that report"); }
 }
@@ -773,6 +783,8 @@ $("queue").addEventListener("contextmenu", e => {
       }
     }});
   }
+  items.push({ label: "Report an issue\u2026",
+               action: () => reportIssue(n === 1 ? [...selected][0] : null) });
   items.push({ label: "Sort by…", action: () => sortMenu(x, y) });
   showMenu(items, x, y);
 });
@@ -937,7 +949,6 @@ async function upload(files) {
     } catch { toast(`upload failed: ${f.name}`); }
   }
 }
-$("reportBtn").addEventListener("click", reportIssue);
 $("drop").onclick = () => $("file").click();
 $("file").onchange = () => { upload([...$("file").files]); $("file").value = ""; };
 // Overlay driven by drag "pings" from this page AND the embedded viewer
