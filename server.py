@@ -1276,10 +1276,15 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         snap["papers"] = {pid: e for pid, e in snap["papers"].items()
                           if visible(e, who)}
         for e in snap["papers"].values():
-            # a reader of a shared paper keeps their own place in it
+            # Everyone keeps their own place in a paper they do not own — and
+            # ONLY their own. Falling back to the entry's own resume_t showed
+            # an admin (who can see every paper) how far its owner had read,
+            # and put other people's papers in the admin's history.
             by = e.pop("resume_by", None) or {}
-            if e.get("owner") != who and who in by:
-                e["resume_t"] = by[who]
+            opened = e.pop("opened_by", None) or {}
+            if e.get("owner") != who:
+                e["resume_t"] = by.get(who, 0)
+                e["last_opened"] = opened.get(who, 0)
         snap["order"] = [pid for pid in snap["order"] if pid in snap["papers"]]
         snap["playlists"] = {
             plid: {**pl, "order": [pid for pid in pl["order"]
@@ -1804,8 +1809,17 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
             # that playlist; opening without one clears it back to per-paper.
             folder = lib.data["playlists"].get(pl) if pl else None
             context = pl if (folder and pid in folder.get("order", [])) else None
-            lib.update(pid, bump=False, persist=False,
-                       last_opened=time.time(), last_playlist=context)
+            who = caller(request)
+            entry = lib.paper(pid)
+            if multiuser and who is not None and entry.get("owner") != who:
+                # someone else's paper: record MY visit under my own name, or
+                # opening a shared paper would rewrite the owner's history
+                with lib.lock:
+                    entry.setdefault("opened_by", {})[who] = time.time()
+                    lib.touch(bump=False)
+            else:
+                lib.update(pid, bump=False, persist=False,
+                           last_opened=time.time(), last_playlist=context)
         base = lib.view_dir(pid).resolve()
         if path in ("", "index.html"):
             # Serve the ONE canonical viewer, not the copy frozen into this
