@@ -14,9 +14,11 @@
  font-family:var(--sans);line-height:1.5}a{color:inherit}
 .bar{display:flex;align-items:baseline;gap:1.2rem;padding:.85rem clamp(1rem,4vw,2.5rem)}
 .bar .mark{font-family:var(--serif);font-size:1.1rem}
-.bar nav{margin-left:auto;display:flex;gap:1.2rem}
-.bar a{font:500 .8rem var(--sans);color:var(--muted);text-decoration:none}
-.bar a:hover{color:var(--ink)}
+.bar nav{margin-left:auto;display:flex;gap:1.2rem;align-items:baseline}
+.bar a,.bar .out{font:500 .8rem var(--sans);color:var(--muted);
+ text-decoration:none;background:none;border:0;padding:0;cursor:pointer}
+.bar a:hover,.bar .out:hover{color:var(--ink)}
+.bar .here{color:var(--ink);box-shadow:inset 0 -6px 0 var(--marker-wash)}
 main{max-width:44rem;margin:0 auto;padding:clamp(.6rem,3vw,2rem) clamp(1rem,4vw,2.5rem) 3rem}
 .lede{font-family:var(--serif);font-size:clamp(1.4rem,3.4vw,1.9rem);
  margin:.6rem 0 1.4rem;font-weight:500}
@@ -40,8 +42,7 @@ button.pri{background:var(--marker);color:#201a05;font-weight:600}
 </style>
 
 <div class="bar"><span class="mark">Rhapsode</span>
- <nav><a href="/dashboard">Home</a><a href="/">Library</a>
- <a href="/logout">Sign out</a></nav></div>
+ <!--nav--></div>
 
 <main>
  <p class="lede">Your settings</p>

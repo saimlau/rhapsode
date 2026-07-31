@@ -1076,25 +1076,65 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
             raise HTTPException(400, str(e))
         return {"ok": True}
 
+    # ONE header for every page. They had drifted apart — Settings was missing
+    # from three of them, Manage from two, and Settings signed out with a GET
+    # link to a POST-only route, so its Sign out simply did not work. Building
+    # it here also means Manage is decided server-side, where admin-ness is
+    # already known, instead of appearing after a fetch.
+    def _nav_html(current, request):
+        who = caller(request)
+        items = [("Home", "/dashboard"), ("Library", "/")]
+        if multiuser and who:
+            items.append(("Settings", "/settings"))
+        if multiuser and who and users.is_admin(who):
+            items.append(("Manage", "/admin"))
+        links = "".join(
+            f'<a{" class=\"here\"" if href == current else ""} href="{href}">{label}</a>'
+            for label, href in items)
+        out = ""
+        if multiuser or auth_cfg.get("password_hash"):
+            out = ('<form method="post" action="/logout">'
+                   '<button class="out" type="submit">Sign out</button></form>')
+        # The styling ships with the markup so the four pages cannot drift
+        # apart again. `.bar nav …` outranks each page's own `.bar a`, and
+        # wrapping keeps five items on a phone-width bar.
+        return (
+            "<style>.bar nav{margin-left:auto;display:flex;flex-wrap:wrap;"
+            "gap:.55rem 1.1rem;align-items:baseline;justify-content:flex-end}"
+            ".bar nav form{display:contents}"
+            ".bar nav a,.bar nav .out{font:500 .8rem var(--sans);"
+            "color:var(--muted);text-decoration:none;background:none;border:0;"
+            "padding:0;cursor:pointer;white-space:nowrap}"
+            ".bar nav a:hover,.bar nav .out:hover{color:var(--ink)}"
+            ".bar nav .here{color:var(--ink);"
+            "box-shadow:inset 0 -6px 0 var(--marker-wash)}"
+            "@media (max-width:430px){.bar nav{gap:.5rem .8rem}"
+            ".bar nav a,.bar nav .out{font-size:.74rem}}</style>"
+            f"<nav>{links}{out}</nav>")
+
+    def _page(filename, request, current):
+        """A page with the shared header substituted in — the equivalent of a
+        server-side include, done where the file is already being read."""
+        page = REPO / filename
+        if not page.is_file():
+            return HTMLResponse(f"<p>{filename} missing from the repo</p>",
+                                status_code=500)
+        html = page.read_text(encoding="utf-8")
+        return HTMLResponse(html.replace("<!--nav-->", _nav_html(current, request)))
+
     @app.get("/admin", response_class=HTMLResponse)
     def admin_page(request: Request):
         who = caller(request)
         if not multiuser or not who or not users.is_admin(who):
             raise HTTPException(404, "not found")
-        page = REPO / "admin.html"
-        if not page.is_file():
-            return HTMLResponse("<p>admin.html missing</p>", status_code=500)
-        return HTMLResponse(page.read_text())
+        return _page("admin.html", request, "/admin")
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request):
         who = caller(request)
         if not multiuser or not who:
             raise HTTPException(404, "not found")
-        page = REPO / "settings.html"
-        if not page.is_file():
-            return HTMLResponse("<p>settings.html missing</p>", status_code=500)
-        return HTMLResponse(page.read_text())
+        return _page("settings.html", request, "/settings")
 
     @app.delete("/api/users/{name}")
     def remove_user(name: str, request: Request):
@@ -1122,12 +1162,8 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         return resp
 
     @app.get("/dashboard", response_class=HTMLResponse)
-    def dashboard_page():
-        page = REPO / "dashboard.html"
-        if not page.is_file():
-            return HTMLResponse("<p>dashboard.html missing</p>",
-                                status_code=500)
-        return HTMLResponse(page.read_text())
+    def dashboard_page(request: Request):
+        return _page("dashboard.html", request, "/dashboard")
 
     def _extraction_label(llm, grobid_cfg):
         model = (llm.get("model") or "LLM").split("/")[-1]   # drop "google/"
@@ -1259,12 +1295,8 @@ def create_app(lib, worker, auth_cfg=None, users=None, secret_key=None):
         }
 
     @app.get("/", response_class=HTMLResponse)
-    def home():
-        page = REPO / "library.html"
-        if not page.is_file():
-            return HTMLResponse("<p>library.html missing from the repo</p>",
-                                status_code=500)
-        return page.read_text(encoding="utf-8")
+    def home(request: Request):
+        return _page("library.html", request, "/")
 
     def _scoped(who):
         """The registry as `who` may see it. ONE implementation, used by the

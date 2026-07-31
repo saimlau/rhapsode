@@ -204,6 +204,10 @@ main { max-width: 68rem; margin: 0 auto;
 #dropov .inner { font: 600 1rem var(--sans); color: var(--marker);
   border: 3px dashed var(--marker); border-radius: 16px; padding: 2rem 3rem;
   background: var(--desk); }
+.add-btn { font: .72rem var(--mono); color: var(--ink); background: none;
+  border: 1px solid var(--marker); border-radius: 6px; padding: .28rem .7rem;
+  cursor: pointer; white-space: nowrap; }
+.add-btn:hover { background: var(--marker-wash); }
 .newf-btn { margin-left: auto; font: .72rem var(--mono); color: var(--muted);
   background: none; border: 1px solid var(--hairline); border-radius: 6px;
   padding: .22rem .6rem; cursor: pointer; }
@@ -273,14 +277,7 @@ main { max-width: 68rem; margin: 0 auto;
 
 <div class="bar">
   <span class="mark">Rhapsode</span>
-  <nav>
-    <a class="here" href="/dashboard">Home</a>
-    <a href="/">Library</a>
-    <a id="peopleLink" href="/admin" hidden>Manage</a>
-    <form method="post" action="/logout" style="display:inline">
-      <button type="submit">Sign out</button>
-    </form>
-  </nav>
+  <!--nav-->
 </div>
 
 <main>
@@ -296,6 +293,8 @@ main { max-width: 68rem; margin: 0 auto;
       <p class="eyebrow" style="margin:0">The shelf</p>
       <div class="head-right">
         <span class="count" id="shelfCount"></span>
+        <button class="add-btn" id="addBtn">＋ Add PDF</button>
+        <input id="addFile" type="file" accept="application/pdf" multiple hidden>
         <div class="viewtog" id="viewtog"></div>
       </div>
     </div>
@@ -895,7 +894,6 @@ function strip(d) {
 }
 
 function render(d) {
-  if (d.me && d.me.admin) $("#peopleLink").hidden = false;
   const prog = (d.resume || []);
   if (prog.length) hero(prog[0]); else startFresh(d);
   continueRow(prog.slice(1));
@@ -946,6 +944,15 @@ document.addEventListener("keydown", e => {
   } else if (e.key === "Enter" && selected.size) {
     location.href = view(selList()[0]);
   }
+});
+
+// A phone has no drag-and-drop, so the drop zone alone left mobile users with
+// no way to add a paper from here at all.
+$("#addBtn").addEventListener("click", () => $("#addFile").click());
+$("#addFile").addEventListener("change", async e => {
+  const files = e.target.files;
+  if (files && files.length) await uploadInto(dropDest(), files);
+  e.target.value = "";            // let the same file be picked again
 });
 
 // whole-page drop-to-upload: drop a PDF anywhere to add it — into the folder

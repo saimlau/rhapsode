@@ -66,11 +66,18 @@ body { background: var(--desk); font-family: var(--sans); }
 }
 #panel .row { display: flex; align-items: center; gap: 8px; }
 #grip {
+  /* touch-action:none is what actually stops the browser stealing the gesture
+     on a phone. Without it a drag moved the panel a few pixels and then turned
+     into a page scroll, because preventDefault() on pointerdown does not
+     cancel touch scrolling — only this does. */
+  touch-action: none;
   width: 14px; align-self: stretch; cursor: grab; flex: none;
   background: radial-gradient(circle, var(--panel-muted) 1px, transparent 1.2px)
               0 0 / 5px 5px; opacity: .7; border-radius: 4px; margin-right: 2px;
 }
 #grip:active { cursor: grabbing; }
+/* a 14px handle is far below the ~44px a finger needs */
+@media (pointer: coarse) { #grip { width: 30px; } }
 button.ctl {
   background: none; border: 0; color: var(--panel-ink); padding: 6px;
   border-radius: 8px; cursor: pointer; display: grid; place-items: center;
@@ -413,6 +420,9 @@ function init() {
   if (store.collapsed) panel.classList.add("collapsed");
   $("grip").addEventListener("pointerdown", e => {
     e.preventDefault();
+    // capture the pointer so moves keep arriving even when the finger leaves
+    // the handle — otherwise a drag dies the moment it strays onto the page
+    try { e.target.setPointerCapture(e.pointerId); } catch { /* older engine */ }
     const r = panel.getBoundingClientRect(), dx = e.clientX - r.left,
           dy = e.clientY - r.top;
     const move = ev => {
@@ -423,10 +433,13 @@ function init() {
     };
     const up = () => { removeEventListener("pointermove", move);
       removeEventListener("pointerup", up);
+      removeEventListener("pointercancel", up);
+      try { e.target.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
       store.panel = { left: panel.style.left, top: panel.style.top,
         bottom: "auto" }; save(); };
     addEventListener("pointermove", move);
     addEventListener("pointerup", up);
+    addEventListener("pointercancel", up);   // the browser can abort a touch
   });
   $("grip").addEventListener("dblclick", () => {
     panel.classList.toggle("collapsed");
